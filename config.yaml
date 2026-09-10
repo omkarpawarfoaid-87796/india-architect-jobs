@@ -1,0 +1,105 @@
+# India-only architecture / built-environment job collector.
+#
+# Add public career pages here. The collector:
+# 1. reads the page and common sitemap URLs,
+# 2. looks for Schema.org JobPosting JSON-LD,
+# 3. saves only relevant Indian architecture jobs,
+# 4. rejects LinkedIn and other blocked/login-gated final apply links.
+#
+# A few empty ATS sections are included so you can add employer board IDs
+# as you discover them.
+
+keywords:
+  include:
+    - architect
+    - architecture
+    - architectural
+    - interior designer
+    - interior architect
+    - urban designer
+    - urban planner
+    - landscape architect
+    - bim architect
+    - bim coordinator
+    - revit architect
+    - design architect
+    - project architect
+    - junior architect
+    - senior architect
+    - visualization architect
+    - 3d visualizer
+  exclude:
+    - software architect
+    - solutions architect
+    - solution architect
+    - cloud architect
+    - enterprise architect
+    - data architect
+    - security architect
+    - network architect
+    - technical architect
+    - systems architect
+    - application architect
+
+india_markers:
+  - india
+  - mumbai
+  - delhi
+  - new delhi
+  - gurugram
+  - gurgaon
+  - noida
+  - bengaluru
+  - bangalore
+  - hyderabad
+  - pune
+  - chennai
+  - kolkata
+  - ahmedabad
+  - surat
+  - jaipur
+  - kochi
+  - cochin
+  - kerala
+  - chandigarh
+  - mohali
+  - lucknow
+  - indore
+  - bhopal
+  - nagpur
+  - nashik
+  - vadodara
+  - goa
+  - visakhapatnam
+  - vijayawada
+  - coimbatore
+  - mysuru
+  - mysore
+  - bhubaneswar
+
+blocked_domains:
+  - linkedin.com
+  - www.linkedin.com
+
+# If the final page clearly redirects to one of these account/login systems,
+# the record is not published. Add domains here when you find more unwanted sources.
+login_url_markers:
+  - /login
+  - /signin
+  - /sign-in
+  - /account/login
+
+# Public ATS board IDs/tokens. Add one per employer as discovered.
+lever_sites: []
+greenhouse_boards: []
+
+# Public employer career pages / job pages.
+# Example:
+# career_pages:
+#   - https://example.com/careers
+career_pages: []
+
+# Maximum pages per source in one hourly run. Helps stay polite and inside free compute.
+max_pages_per_source: 40
+request_timeout_seconds: 15
+request_delay_seconds: 0.35
