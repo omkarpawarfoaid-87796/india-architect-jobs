@@ -97,7 +97,22 @@ greenhouse_boards: []
 # Example:
 # career_pages:
 #   - https://example.com/careers
-career_pages: []
+career_pages: [
+ - https://www.abhikalpan.in/career.html
+  - https://www.uha.global/careers
+  - https://hingooarchitects.com/careers
+  - https://daisaria.com/careers/
+  - https://www.p-cdesigns.com/careers
+  - https://www.morphogenesis.org/careers/
+  - https://www.dhapl.in/careers.html
+  - https://www.shreedesigns.in/careers/
+  - https://www.studio-cplusc.com/careers
+  - https://apices.in/careers
+  - https://www.hafeezcontractor.com/careers
+  - https://www.architecturebrio.com/careers/
+  - https://www.studiolotus.in/careers
+  - https://www.abindesignstudio.com/career
+]
 
 # Maximum pages per source in one hourly run. Helps stay polite and inside free compute.
 max_pages_per_source: 40
