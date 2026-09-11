@@ -7,7 +7,7 @@ import re
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from urllib.parse import urljoin, urlparse, urldefrag
 from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/3.0 "
+    "ArchitectJobsCollector/3.1 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -160,7 +160,22 @@ ROLE_CATEGORY_RULES = [
     ("Landscape Architecture", ["landscape architect"]),
     ("Urban Design / Planning", ["urban designer", "urban planner", "urban design", "urban planning"]),
     ("Interior Design", ["interior architect", "interior designer", "interior design"]),
-    ("Visualization", ["3d visualizer", "visualizer", "visualisation", "visualization"]),
+    (
+        "Visualization",
+        [
+            "3d visualizer",
+            "3d visualiser",
+            "visualizer",
+            "visualiser",
+            "visualisation",
+            "visualization",
+            "3d render artist",
+            "render artist",
+            "rendering artist",
+            "architectural renderer",
+            "architectural rendering",
+        ],
+    ),
     ("Architecture", ["architect", "architecture", "architectural"]),
 ]
 
@@ -2099,22 +2114,46 @@ def normalize_pipe_tags(value):
 
 
 def extract_qualification_for_export(text):
-    """Best-effort qualification extraction; blank if the source does not say it."""
+    """Extract qualification without truncating abbreviations such as B.Arch."""
     value = clean_text(text or "")
-    patterns = [
-        r"(?:qualification|education(?: requirement)?)\s*[:\-]\s*([^.;|]{3,140})",
-        r"\b(B\.?\s*Arch(?:itecture)?(?:\s*\([^)]*\))?)\b",
-        r"\b(M\.?\s*Arch(?:itecture)?(?:\s*\([^)]*\))?)\b",
-        r"\b(Bachelor'?s degree in Architecture(?:\s*\([^)]*\))?)\b",
-        r"\b(Master'?s degree in Architecture(?:\s*\([^)]*\))?)\b",
-        r"\b(Diploma (?:or degree )?in Architectural Drafting)\b",
+    if not value:
+        return ""
+
+    specific_patterns = [
+        r"(Bachelor'?s degree in Architecture\s*\(B\.?\s*Arch\))",
+        r"(Bachelor'?s degree in Architecture)",
+        r"(Master'?s degree in Architecture\s*\(M\.?\s*Arch\))",
+        r"(Master'?s degree in Architecture)",
+        r"(B\.?\s*Arch(?:itecture)?)",
+        r"(M\.?\s*Arch(?:itecture)?)",
+        r"(Diploma or degree in Architectural Drafting)",
+        r"(Diploma in Architectural Drafting)",
+        r"(Diploma in Architecture)",
+        r"(Bachelor'?s degree in Civil Engineering(?: or equivalent)?)",
+        r"(Bachelor Degree in Architecture)",
+        r"(Bachelor Degree)",
+        r"(Diploma Degree)",
     ]
-    for pattern in patterns:
+    for pattern in specific_patterns:
         m = re.search(pattern, value, re.I)
         if m:
-            return clean_text(m.group(1))
-    return ""
+            result = clean_text(m.group(1))
+            result = re.sub(r"\bB\.\s*Arch\b", "B.Arch", result, flags=re.I)
+            result = re.sub(r"\bM\.\s*Arch\b", "M.Arch", result, flags=re.I)
+            return result
 
+    m = re.search(
+        r"(?:qualification|education(?: requirement)?)\s*[:\-]\s*"
+        r"(.{3,160}?)"
+        r"(?=\s+(?:experience|responsibilit(?:y|ies)|requirements?|skills?|"
+        r"application|job type|location|deadline|how to apply)\s*[:\-]?|$)",
+        value,
+        re.I,
+    )
+    if m:
+        return clean_text(m.group(1)).strip(" -|;,")
+
+    return ""
 
 def extract_gender_for_export(text):
     """Only emit gender when it is explicitly stated by the vacancy."""
@@ -2215,12 +2254,105 @@ def parse_salary_for_export(value):
     return "", "", salary_type
 
 
+
+EXPORT_FOOTER_MARKERS = (
+    "OPEN POSITIONS",
+    "GET IN TOUCH",
+    "EXPLORE OUR OFFICE CULTURE",
+    "LEARN MORE",
+    "FOR WORK ENQUIRIES",
+    "FOR PRESS ENQUIRIES",
+    "TERMS DISCLAIMER",
+)
+
+NAV_PHRASES = (
+    "Home About Services Projects Careers Contact",
+    "Home About Projects Careers Contact",
+    "Home About Services Careers Contact",
+    "About Services Projects Careers Contact",
+)
+
+
+def clean_export_description(value, title="", company=""):
+    """Remove obvious website navigation/header/footer debris conservatively."""
+    value = clean_text(value or "")
+    if not value:
+        return ""
+
+    for nav in NAV_PHRASES:
+        value = re.sub(re.escape(nav), " ", value, flags=re.I)
+
+    company_name = clean_text(company or "")
+    if company_name:
+        value = re.sub(
+            rf"^(?:\s*{re.escape(company_name)}\s*)+",
+            "",
+            value,
+            flags=re.I,
+        )
+
+    # Remove a leading all-uppercase brand header when it is followed by normal prose.
+    value = re.sub(
+        r"^[A-Z][A-Z0-9&.'’+\-\s]{5,90}(?=\s+[A-Z][a-z])",
+        "",
+        value,
+    )
+
+    value = re.sub(r"\s+", " ", value).strip()
+
+    upper = value.upper()
+    cut_positions = []
+    for footer in EXPORT_FOOTER_MARKERS:
+        pos = upper.find(footer)
+        if pos >= 120:
+            cut_positions.append(pos)
+    if cut_positions:
+        value = value[:min(cut_positions)].strip()
+
+    clean_title = clean_text(title or "")
+    if clean_title:
+        value = re.sub(
+            rf"^\s*{re.escape(clean_title)}\s*[:\-]?\s*",
+            "",
+            value,
+            flags=re.I,
+        ).strip()
+
+    return re.sub(r"\s+", " ", value).strip(" -|")
+
+
+def export_category(title, stored_category):
+    inferred = job_category(title)
+    if inferred and inferred != "Architecture / Design":
+        return inferred
+    stored = clean_text(stored_category or "")
+    return stored or "Architecture"
+
+
+def rolling_expiry_date(real_deadline, cfg):
+    """Use real deadline when present; otherwise give verified jobs a short rolling expiry."""
+    deadline = real_deadline if isinstance(real_deadline, date) else parse_date(real_deadline)
+    if deadline:
+        return deadline
+    days = int(cfg.get("website_rolling_expiry_days", 7))
+    days = max(1, min(days, 30))
+    return now_ist().date() + timedelta(days=days)
+
+
+
 def website_record_from_meta(record, cfg):
     """Map one verified internal collector row to the developer's exact schema."""
-    description = clean_text(
+    title = clean_text(record.get("Job Title") or "")
+    company = clean_text(record.get("Company") or "")
+    raw_description = clean_text(
         record.get("Full Description") or record.get("Short Description") or ""
     )
-    company = clean_text(record.get("Company") or "")
+    description = clean_export_description(
+        raw_description,
+        title=title,
+        company=company,
+    )
+
     email = clean_text(record.get("Public Contact Email") or "")
     application_method = clean_text(record.get("Application Method") or "")
     raw_apply_url = clean_text(record.get("Apply URL") or "")
@@ -2235,14 +2367,15 @@ def website_record_from_meta(record, cfg):
     if raw_apply_url.lower().startswith("mailto:"):
         apply_email = raw_apply_url.split(":", 1)[1].split("?", 1)[0].strip()
 
-    # Email applications do not need a fake external URL.
     apply_url = "" if is_email_apply else raw_apply_url
 
-    deadline = (
+    real_deadline = (
         record.get("Application Deadline")
         or record.get("Valid Through")
         or ""
     )
+    website_expiry = rolling_expiry_date(real_deadline, cfg)
+
     salary, max_salary, salary_type = parse_salary_for_export(
         record.get("Salary") or ""
     )
@@ -2256,15 +2389,12 @@ def website_record_from_meta(record, cfg):
 
     compact_location = "|".join(x for x in (city or state, country) if x)
 
-    category = clean_text(record.get("Job Category") or "Architecture")
+    category = export_category(title, record.get("Job Category") or "")
     experience = clean_text(record.get("Experience") or "")
-    title = clean_text(record.get("Job Title") or "")
 
     employer_author_mode = clean_text(
         cfg.get("employer_author_mode", "company_name")
     ).lower()
-    # Until the developer confirms a WP author ID/username requirement, V3 uses
-    # the employer/company name as requested in the supplied example.
     employer_author = company
     if employer_author_mode == "email" and email:
         employer_author = email
@@ -2277,8 +2407,8 @@ def website_record_from_meta(record, cfg):
         "employer_author": employer_author,
         "employer_email": email,
         "employer_name": company,
-        "expiry_date": format_website_date(deadline),
-        "application_deadline_date": format_website_date(deadline),
+        "expiry_date": format_website_date(website_expiry),
+        "application_deadline_date": format_website_date(real_deadline),
         "featured": "no",
         "urgent": urgent_for_export(f"{title} {description}"),
         "filled": "no",
@@ -2302,7 +2432,6 @@ def website_record_from_meta(record, cfg):
         "video_url": "",
         "logo_url": clean_text(record.get("Logo URL") or ""),
     }
-
 
 def clear_sheet_tab(service, spreadsheet_id, tab):
     """Clear all values from a worksheet while preserving the tab itself."""
@@ -2814,9 +2943,36 @@ def self_test():
     assert exported["max_salary"] == "120000"
     assert exported["salary_type"] == "Monthly"
     assert exported["application_deadline_date"] == "31-10-2026"
+    assert exported["expiry_date"] == "31-10-2026"
     assert exported["career_level"] == "Senior Level"
+    assert exported["qualification"] == "Bachelor's degree in Architecture (B.Arch)"
 
-    print("SELF TEST PASSED: V3.0 validation and website-export schema rules are working.")
+    undated_sample = dict(export_sample)
+    undated_sample["Application Deadline"] = ""
+    undated_sample["Job Title"] = "3D Render Artist (Architecture)"
+    undated_sample["Job Category"] = "Architecture"
+    undated_sample["Full Description"] = (
+        "RASIK P HINGOO ASSOCIATES Home About Services Projects Careers Contact "
+        "Develop detailed 3D models using SketchUp and 3ds Max. "
+        "Requirements: strong architectural visualization portfolio. "
+        "OPEN POSITIONS GET IN TOUCH +91-9000000000"
+    )
+    undated = website_record_from_meta(undated_sample, cfg)
+    expected_expiry = now_ist().date() + timedelta(
+        days=int(cfg.get("website_rolling_expiry_days", 7))
+    )
+    assert undated["expiry_date"] == expected_expiry.strftime("%d-%m-%Y")
+    assert undated["application_deadline_date"] == ""
+    assert undated["category"] == "Visualization"
+    assert undated["industry"] == "Architecture Visualization"
+    assert "Home About Services" not in undated["description"]
+    assert "GET IN TOUCH" not in undated["description"]
+
+    assert extract_qualification_for_export(
+        "Qualification: Bachelor's degree in Architecture (B.Arch)"
+    ) == "Bachelor's degree in Architecture (B.Arch)"
+
+    print("SELF TEST PASSED: V3.1 qualification, clean description, category and rolling-expiry rules are working.")
 
 
 def main():
@@ -2831,7 +2987,7 @@ def main():
     cfg = load_config()
     jobs, reports = scan_all_sources(cfg)
     print("=" * 80)
-    print(f"V3.0 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V3.1 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
