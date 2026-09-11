@@ -1,5 +1,5 @@
 """
-V4.2.1 Fresh Job Discovery
+V4.3 Fresh Job Discovery
 
 Purpose:
 - Find newly surfaced architecture / built-environment job signals every few hours.
@@ -240,6 +240,18 @@ def source_from_official_result(result, signal, cfg):
     if not candidate:
         return None
 
+    # V4.3: discovered company must independently pass India + employer quality.
+    quality_valid = disc.validate_career_page(
+        candidate["career_url"],
+        cfg,
+    )
+    if not quality_valid:
+        return None
+    candidate["company_name"] = quality_valid["company_name"]
+    candidate["company_website"] = quality_valid["company_website"]
+    candidate["career_url"] = quality_valid["career_url"]
+    candidate["quality_reason"] = quality_valid.get("quality_reason", "")
+
     # Verify the official career page text still has enough job relevance.
     response = disc.fetch(candidate["career_url"], cfg)
     if not response:
@@ -325,6 +337,7 @@ def run_fresh_discovery(cfg):
     service = core.sheet_service()
     core.ensure_sources_sheet(service, sheet_id, tab)
     core.seed_sources_registry(service, sheet_id, tab, cfg)
+    disc.audit_existing_discovered_sources(service, sheet_id, tab, cfg)
 
     headers, existing_urls, _ = disc.existing_source_urls(
         service,
@@ -416,6 +429,9 @@ def self_test():
     queries = fresh_queries(cfg)
     assert queries
     assert any("India" in q for q in queries)
+
+    assert disc.hard_block_reason("https://www.yellowpages.com/jobs")
+    assert hasattr(disc, "official_company_quality")
 
     print("FRESH JOB DISCOVERY SELF TEST PASSED")
 
