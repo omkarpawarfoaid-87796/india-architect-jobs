@@ -1,5 +1,5 @@
 """
-V4.4 Fresh Job Discovery
+V4.4.1 Fresh Job Discovery
 
 Purpose:
 - Find newly surfaced architecture / built-environment job signals every few hours.
@@ -34,13 +34,68 @@ def compact(value):
 
 
 def blocked_signal_domain(url):
+    """
+    Compatibility-safe blocked-domain check.
+
+    V4.4.1 does not assume discovery.py exposes DISCOVERY_BLOCKED_DOMAINS.
+    It falls back to the known blocked domains and also asks collector.py's
+    blocklist where possible.
+    """
     d = core.domain(url)
     if not d:
         return False
-    return any(
-        d == x or d.endswith("." + x)
-        for x in disc.DISCOVERY_BLOCKED_DOMAINS
-    )
+
+    fallback = {
+        "linkedin.com",
+        "indeed.com",
+        "in.indeed.com",
+        "naukri.com",
+        "glassdoor.co.in",
+        "glassdoor.com",
+        "foundit.in",
+        "monsterindia.com",
+        "shine.com",
+        "timesjobs.com",
+        "jooble.org",
+        "ziprecruiter.com",
+        "talent.com",
+        "jobrapido.com",
+        "simplyhired.co.in",
+        "facebook.com",
+        "instagram.com",
+        "youtube.com",
+        "x.com",
+        "twitter.com",
+        "pinterest.com",
+        "web.archive.org",
+        "archive.org",
+        "yellowpages.com",
+        "superpages.com",
+        "houzz.com",
+        "interiordesign.net",
+        "decorilla.com",
+        "people.inc",
+        "condenast.com",
+        "archdaily.com",
+        "architizer.com",
+        "dezeen.com",
+        "designboom.com",
+    }
+
+    discovery_blocked = getattr(disc, "DISCOVERY_BLOCKED_DOMAINS", set()) or set()
+    blocked_domains = fallback | set(discovery_blocked)
+
+    if any(d == x or d.endswith("." + x) for x in blocked_domains):
+        return True
+
+    try:
+        cfg = load_config()
+        if core.is_blocked_domain(url, cfg):
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 def normalize_role_from_text(text, cfg):
@@ -413,6 +468,19 @@ def self_test():
     assert linkedin_signal["company"] == "Arete Design Studio"
     assert blocked_signal_domain(linkedin_signal["signal_url"])
     assert linkedin_signal["recent_hint"] is True
+
+    # V4.4.1 regression: fresh discovery must remain functional even when an
+    # older discovery.py lacks DISCOVERY_BLOCKED_DOMAINS.
+    original_blocked = getattr(disc, "DISCOVERY_BLOCKED_DOMAINS", None)
+    had_attr = hasattr(disc, "DISCOVERY_BLOCKED_DOMAINS")
+    try:
+        if had_attr:
+            delattr(disc, "DISCOVERY_BLOCKED_DOMAINS")
+        assert blocked_signal_domain("https://www.linkedin.com/jobs/view/123")
+        assert blocked_signal_domain("https://www.archdaily.com/opportunities")
+    finally:
+        if had_attr:
+            setattr(disc, "DISCOVERY_BLOCKED_DOMAINS", original_blocked)
 
     direct_signal = result_to_signal(
         {
