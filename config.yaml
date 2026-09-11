@@ -1,4 +1,4 @@
-# Architect Jobs Collector V3.0 — Website Import Schema
+# Architect Jobs Collector V4.0 — Auto Discovery + Website Import Schema
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -198,3 +198,64 @@ employer_author_mode: "company_name"
 # Undated but verified-open jobs receive a rolling website expiry that is
 # refreshed after every successful collector run.
 website_rolling_expiry_days: 7
+
+
+# -------------------------------------------------------------------
+# V4 Sources registry + scale controls
+# -------------------------------------------------------------------
+hourly_source_batch_size: 80
+source_disable_after_failures: 8
+
+# Daily automatic discovery. The discovery workflow rotates through these
+# cities so the free search volume stays controlled while coverage grows.
+discovery_cities:
+  - Mumbai
+  - New Delhi
+  - Gurugram
+  - Noida
+  - Bengaluru
+  - Hyderabad
+  - Pune
+  - Chennai
+  - Kolkata
+  - Ahmedabad
+  - Jaipur
+  - Kochi
+  - Goa
+  - Chandigarh
+  - Indore
+  - Surat
+  - Coimbatore
+  - Lucknow
+  - Bhubaneswar
+  - Nagpur
+  - Vadodara
+  - Navi Mumbai
+  - Thane
+  - Dehradun
+  - Guwahati
+
+discovery_cities_per_day: 5
+discovery_max_queries_per_day: 20
+discovery_results_per_query: 10
+discovery_max_new_sources_per_day: 30
+discovery_max_career_candidates_per_site: 10
+discovery_min_relevance_score: 2
+discovery_request_delay_seconds: 1.2
+
+discovery_query_templates:
+  - '"architecture firm" careers {city} India'
+  - 'architects "join our team" {city} India'
+  - '"interior design studio" careers {city} India'
+  - '"landscape architecture" careers {city} India'
+
+# -------------------------------------------------------------------
+# 500 x 500 logo output
+# -------------------------------------------------------------------
+# V4 wraps the validated source logo with wsrv.nl so logo_url returns a
+# 500x500 PNG using fit=contain (no stretching). The transparent background
+# keeps non-square logos centered safely.
+logo_500_proxy_enabled: true
+logo_proxy_base_url: "https://wsrv.nl/"
+logo_size_px: 500
+logo_transparent_background: "00FFFFFF"
