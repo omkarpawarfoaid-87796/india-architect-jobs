@@ -20,6 +20,16 @@ import collector as core
 DISCOVERY_HEADERS = core.SOURCE_HEADERS
 
 DISCOVERY_BLOCKED_DOMAINS = {
+    # V4.3 hard blocks: archives, directories, broad job/media/design platforms.
+    "web.archive.org",
+    "archive.org",
+    "yellowpages.com",
+    "superpages.com",
+    "houzz.com",
+    "interiordesign.net",
+    "decorilla.com",
+    "people.inc",
+    "condenast.com",
     "linkedin.com",
     "indeed.com",
     "in.indeed.com",
@@ -81,6 +91,98 @@ PORTAL_TERMS = (
     "recruitment portal",
 )
 
+# V4.3 company-quality classification.
+BUILT_ENVIRONMENT_IDENTITY_TERMS = (
+    "architecture practice",
+    "architectural practice",
+    "architecture studio",
+    "architects",
+    "architectural design",
+    "interior design studio",
+    "interior design firm",
+    "interior architecture",
+    "landscape architecture",
+    "landscape design",
+    "urban design",
+    "urban planning",
+    "master planning",
+    "masterplanning",
+    "aec consultancy",
+    "design consultancy",
+    "built environment",
+    "architecture and design",
+    "architecture & design",
+)
+
+NEGATIVE_COMPANY_IDENTITY_TERMS = (
+    "software company",
+    "software platform",
+    "saas",
+    "cloud platform",
+    "design software",
+    "architecture software",
+    "bim software",
+    "collaboration platform",
+    "publisher",
+    "publishing company",
+    "magazine",
+    "media company",
+    "news media",
+    "job board",
+    "job portal",
+    "recruitment platform",
+    "staffing company",
+    "talent platform",
+    "marketplace",
+    "directory",
+    "yellow pages",
+    "digital publisher",
+)
+
+INDIA_LOCATION_TERMS = (
+    "india",
+    "mumbai",
+    "navi mumbai",
+    "thane",
+    "pune",
+    "new delhi",
+    "delhi",
+    "gurugram",
+    "gurgaon",
+    "noida",
+    "bengaluru",
+    "bangalore",
+    "hyderabad",
+    "chennai",
+    "kolkata",
+    "ahmedabad",
+    "jaipur",
+    "kochi",
+    "cochin",
+    "goa",
+    "chandigarh",
+    "indore",
+    "surat",
+    "coimbatore",
+    "lucknow",
+    "bhubaneswar",
+    "nagpur",
+    "vadodara",
+    "dehradun",
+    "guwahati",
+)
+
+GENERIC_PLATFORM_NAME_TERMS = (
+    "yellow pages",
+    "what's nearby",
+    "jobs",
+    "careers in",
+    "publisher",
+    "magazine",
+    "houzz",
+    "superpages",
+)
+
 
 def clean(value):
     return core.clean_text(value)
@@ -126,7 +228,7 @@ def fetch(url, cfg):
             timeout=int(cfg.get("request_timeout_seconds", 15)),
             headers={
                 "User-Agent": (
-                    "ArchitectJobsDiscovery/4.2 "
+                    "ArchitectJobsDiscovery/4.3 "
                     "(public-source discovery; no authentication bypass)"
                 ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -211,6 +313,134 @@ def search_web(query, cfg):
     return results
 
 
+
+def hard_block_reason(url):
+    d = host(url)
+    if not d:
+        return "Missing domain"
+    for blocked_domain in DISCOVERY_BLOCKED_DOMAINS:
+        if d == blocked_domain or d.endswith("." + blocked_domain):
+            return f"Blocked platform/domain: {blocked_domain}"
+    return ""
+
+
+def india_relevance_score(url, page_text="", city_hint="", state_hint=""):
+    """
+    Require independent India evidence. Search-query city alone is NOT enough.
+
+    Strong:
+    - .in / .co.in domain
+    - official page explicitly mentions India
+    - official page explicitly mentions a known Indian city/state hint
+    """
+    score = 0
+    d = host(url).lower()
+    low = clean(page_text).lower()
+
+    if d.endswith(".in") or d.endswith(".co.in"):
+        score += 4
+
+    if re.search(r"\bindia\b", low):
+        score += 3
+
+    for term in INDIA_LOCATION_TERMS:
+        if re.search(rf"\b{re.escape(term)}\b", low):
+            score += 2
+            break
+
+    city_hint = clean(city_hint).lower()
+    state_hint = clean(state_hint).lower()
+    if city_hint and re.search(rf"\b{re.escape(city_hint)}\b", low):
+        score += 2
+    if state_hint and re.search(rf"\b{re.escape(state_hint)}\b", low):
+        score += 1
+
+    return score
+
+
+def company_identity_score(page_text, company_name=""):
+    low = f"{clean(company_name)} {clean(page_text)}".lower()
+    score = 0
+
+    for term in BUILT_ENVIRONMENT_IDENTITY_TERMS:
+        if term in low:
+            score += 3
+
+    # Weaker identity evidence.
+    if re.search(r"\barchitects?\b", low):
+        score += 2
+    if "interior design" in low:
+        score += 2
+    if "landscape" in low and ("design" in low or "architecture" in low):
+        score += 2
+    if "urban design" in low or "urban planning" in low:
+        score += 2
+
+    for term in NEGATIVE_COMPANY_IDENTITY_TERMS:
+        if term in low:
+            score -= 5
+
+    return score
+
+
+def generic_platform_name(company_name):
+    low = clean(company_name).lower()
+    return any(term in low for term in GENERIC_PLATFORM_NAME_TERMS)
+
+
+def official_company_quality(url, company_name, page_text, city_hint="", state_hint=""):
+    """
+    Returns (accepted, reason, scores).
+
+    This gate is intentionally stricter than vacancy relevance. We only want
+    official India-relevant built-environment employers in Sources.
+    """
+    reason = hard_block_reason(url)
+    if reason:
+        return False, reason, {"india": 0, "identity": 0}
+
+    if generic_platform_name(company_name):
+        return False, "Generic directory/media/job-platform name", {"india": 0, "identity": 0}
+
+    india_score = india_relevance_score(
+        url,
+        page_text=page_text,
+        city_hint=city_hint,
+        state_hint=state_hint,
+    )
+    identity_score = company_identity_score(page_text, company_name)
+
+    if india_score < 2:
+        return False, f"Insufficient India evidence (score {india_score})", {
+            "india": india_score,
+            "identity": identity_score,
+        }
+
+    if identity_score < 2:
+        return False, f"Not verified as a built-environment employer (score {identity_score})", {
+            "india": india_score,
+            "identity": identity_score,
+        }
+
+    return True, "", {"india": india_score, "identity": identity_score}
+
+
+def homepage_identity_context(url, cfg):
+    """
+    Fetch official homepage for company identity/country evidence.
+    Career pages alone may contain generic job text that creates false positives.
+    """
+    base = origin(url)
+    r = fetch(base, cfg)
+    if not r:
+        return "", ""
+    soup = BeautifulSoup(r.text, "html.parser")
+    text = core.best_main_text(soup)
+    name = company_name_from_page(soup, r.url)
+    return name, text
+
+
+
 def careerish_url(url):
     path = (urlparse(url).path or "").lower()
     return any(word.replace(" ", "-") in path or word.replace("-", "") in path.replace("-", "")
@@ -290,28 +520,62 @@ def candidate_career_links(page_url, soup, cfg):
     return out[: int(cfg.get("discovery_max_career_candidates_per_site", 12))]
 
 
-def validate_career_page(url, cfg, relevance_context=""):
+def validate_career_page(
+    url,
+    cfg,
+    relevance_context="",
+    city_hint="",
+    state_hint="",
+):
     r = fetch(url, cfg)
     if not r:
         return None
-    if host(r.url) in DISCOVERY_BLOCKED_DOMAINS:
+
+    block_reason = hard_block_reason(r.url)
+    if block_reason:
         return None
 
     soup = BeautifulSoup(r.text, "html.parser")
-    text = core.best_main_text(soup)
-    combined = f"{relevance_context} {text} {clean(soup.title.get_text(' ', strip=True) if soup.title else '')}"
+    career_text = core.best_main_text(soup)
 
-    # Require built-environment/company relevance.
-    if relevance_score(combined) < int(cfg.get("discovery_min_relevance_score", 2)):
+    # Resolve identity from the official homepage, not only from the career page.
+    homepage_name, homepage_text = homepage_identity_context(r.url, cfg)
+    company_name = homepage_name or company_name_from_page(soup, r.url)
+
+    combined = " ".join(
+        x for x in (
+            relevance_context,
+            homepage_text,
+            career_text,
+            clean(soup.title.get_text(" ", strip=True) if soup.title else ""),
+        )
+        if x
+    )
+
+    accepted, reason, scores = official_company_quality(
+        r.url,
+        company_name,
+        combined,
+        city_hint=city_hint,
+        state_hint=state_hint,
+    )
+    if not accepted:
         return None
 
-    low = combined.lower()
+    low = career_text.lower()
     has_career_signal = (
         careerish_url(r.url)
         or any(x in low for x in (
-            "careers", "career opportunities", "current openings", "open positions",
-            "join our team", "we are hiring", "submit your application",
-            "send your resume", "send your cv",
+            "careers",
+            "career opportunities",
+            "current openings",
+            "open positions",
+            "join our team",
+            "we are hiring",
+            "submit your application",
+            "send your resume",
+            "send your cv",
+            "apply now",
         ))
     )
     if not has_career_signal:
@@ -319,9 +583,13 @@ def validate_career_page(url, cfg, relevance_context=""):
 
     return {
         "career_url": canonical(r.url),
-        "company_name": company_name_from_page(soup, r.url),
+        "company_name": company_name,
         "company_website": origin(r.url),
-        "page_text": text,
+        "page_text": career_text,
+        "quality_reason": (
+            f"Verified India built-environment employer "
+            f"(India {scores['india']}, Identity {scores['identity']})"
+        ),
     }
 
 
@@ -348,11 +616,17 @@ def discover_from_result(result, city, cfg):
 
     candidates = candidate_career_links(r.url, soup, cfg)
     for career_url in candidates:
-        valid = validate_career_page(career_url, cfg, relevance_context=context)
+        state = core.CITY_STATE.get(city.lower(), "")
+        valid = validate_career_page(
+            career_url,
+            cfg,
+            relevance_context=context,
+            city_hint=city,
+            state_hint=state,
+        )
         if not valid:
             continue
 
-        state = core.CITY_STATE.get(city.lower(), "")
         return {
             "source_id": core._source_id(valid["career_url"]),
             "company_name": valid["company_name"],
@@ -368,6 +642,7 @@ def discover_from_result(result, city, cfg):
             "jobs_found": "0",
             "consecutive_failures": "0",
             "status": "New",
+            "quality_reason": valid.get("quality_reason", ""),
         }
     return None
 
@@ -417,6 +692,104 @@ def append_sources(service, sheet_id, tab, rows):
     return len(values)
 
 
+
+def reject_source_row(service, sheet_id, tab, headers, row_num, rec, reason):
+    rec["status"] = "Rejected"
+    rec["quality_reason"] = reason
+    row_values = [rec.get(h, "") for h in headers]
+    service.spreadsheets().values().update(
+        spreadsheetId=sheet_id,
+        range=f"'{tab}'!A{row_num}:{core.column_letter(len(headers))}{row_num}",
+        valueInputOption="RAW",
+        body={"values": [row_values]},
+    ).execute()
+
+
+def audit_existing_discovered_sources(service, sheet_id, tab, cfg):
+    """
+    Clean previously discovered junk without deleting history.
+
+    Seed Website rows are preserved unless they are on a hard-blocked domain.
+    Discovered Website / Fresh Job Signal rows must pass V4.3 official-employer
+    and India quality verification.
+    """
+    headers = core.ensure_sources_sheet(service, sheet_id, tab)
+    values = core.read_sheet_values(service, sheet_id, tab)
+    if not values:
+        return 0
+
+    rejected = 0
+    max_audit = int(cfg.get("source_quality_audit_batch_size", 60))
+    audited = 0
+
+    for row_num, row in enumerate(values[1:], start=2):
+        if audited >= max_audit:
+            break
+
+        rec = core.row_to_record(headers, row)
+        status = clean(rec.get("status") or "").lower()
+        if status == "rejected":
+            continue
+
+        url = canonical(rec.get("career_url") or "")
+        source_type = clean(rec.get("source_type") or "")
+
+        block_reason = hard_block_reason(url)
+        if block_reason:
+            reject_source_row(
+                service, sheet_id, tab, headers, row_num, rec, block_reason
+            )
+            rejected += 1
+            continue
+
+        # Preserve manual seed list unless explicitly hard-blocked.
+        if source_type == "Seed Website":
+            continue
+
+        if source_type not in ("Discovered Website", "Fresh Job Signal"):
+            continue
+
+        audited += 1
+        city = clean(rec.get("city") or "")
+        state = clean(rec.get("state") or "")
+
+        valid = validate_career_page(
+            url,
+            cfg,
+            city_hint=city,
+            state_hint=state,
+        )
+        if not valid:
+            reject_source_row(
+                service,
+                sheet_id,
+                tab,
+                headers,
+                row_num,
+                rec,
+                "Failed V4.3 India/built-environment source-quality gate",
+            )
+            rejected += 1
+        else:
+            rec["quality_reason"] = valid.get("quality_reason", "")
+            if status in ("warning", "new", ""):
+                # Keep Warning if operationally failing; otherwise Active.
+                if status != "warning":
+                    rec["status"] = "Active"
+            row_values = [rec.get(h, "") for h in headers]
+            service.spreadsheets().values().update(
+                spreadsheetId=sheet_id,
+                range=f"'{tab}'!A{row_num}:{core.column_letter(len(headers))}{row_num}",
+                valueInputOption="RAW",
+                body={"values": [row_values]},
+            ).execute()
+
+    if rejected:
+        print(f"SOURCE QUALITY AUDIT | rejected {rejected} existing sources")
+    return rejected
+
+
+
 def run_discovery(cfg):
     sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
     if not sheet_id:
@@ -426,6 +799,7 @@ def run_discovery(cfg):
     svc = core.sheet_service()
     core.ensure_sources_sheet(svc, sheet_id, tab)
     core.seed_sources_registry(svc, sheet_id, tab, cfg)
+    audit_existing_discovered_sources(svc, sheet_id, tab, cfg)
 
     headers, existing_urls, existing_domains = existing_source_urls(svc, sheet_id, tab)
 
@@ -498,6 +872,29 @@ def self_test():
     assert "https://example.com/careers" in links
     assert relevance_score("Architecture and interior design studio") >= 2
     assert core._source_id("https://example.com/careers").startswith("SRC-")
+
+    # V4.3 quality regressions.
+    assert hard_block_reason("https://www.yellowpages.com/search")
+    assert hard_block_reason("https://web.archive.org/web/123/example.com")
+    assert hard_block_reason("https://www.houzz.com/jobs")
+
+    accepted, reason, scores = official_company_quality(
+        "https://examplearchitects.in/careers",
+        "Example Architects",
+        "Example Architects is an architecture studio in Mumbai, India.",
+        city_hint="Mumbai",
+        state_hint="Maharashtra",
+    )
+    assert accepted is True
+    assert scores["india"] >= 2 and scores["identity"] >= 2
+
+    accepted, reason, _ = official_company_quality(
+        "https://example-software.com/careers",
+        "Example Software",
+        "Cloud software platform and SaaS collaboration product.",
+        city_hint="Mumbai",
+    )
+    assert accepted is False
 
     print("DISCOVERY SELF TEST PASSED")
 
