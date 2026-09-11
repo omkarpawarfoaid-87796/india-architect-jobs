@@ -34,6 +34,6 @@ jobs:
       - name: Run V2 collector
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          GOOGLE_SHEET_TAB: Jobs
+          GOOGLE_SHEET_TAB: Sheet1
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: python collector.py
