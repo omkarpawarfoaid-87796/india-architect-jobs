@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/4.1 "
+    "ArchitectJobsCollector/4.2 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -2517,7 +2517,7 @@ def website_record_from_meta(record, cfg):
         employer_author = email
 
     return {
-        "external_id": external_id_from_meta(record),
+        "external_id": "",
         "title": title,
         "description": description,
         "status": "publish",
@@ -3305,7 +3305,7 @@ def self_test():
     }
     exported = website_record_from_meta(export_sample, cfg)
     assert list(exported.keys()) == WEBSITE_HEADERS
-    assert exported["external_id"].startswith("JOB-")
+    assert exported["external_id"] == ""
     assert exported["status"] == "publish"
     assert exported["location"] == "Mumbai|India"
     assert exported["tag"] == "AutoCAD|Revit|Rhino"
@@ -3355,8 +3355,9 @@ def self_test():
     assert company_name_from_domain("https://hingooarchitects.com/careers") == "Hingoo Architects"
     assert company_name_from_domain("https://www.shreedesigns.in/careers/") == "Shree Designs"
     assert company_name_from_domain("https://www.hafeezcontractor.com/careers") == "Hafeez Contractor"
+    assert exported["external_id"] == ""
 
-    print("SELF TEST PASSED: V4.1 validation, source registry, 500px logo and dynamic-source rules are working.")
+    print("SELF TEST PASSED: V4.2 validation, blank external_id, source registry, 500px logo and dynamic-source rules are working.")
 
 
 def main():
@@ -3387,7 +3388,7 @@ def main():
             print(f"SOURCES WARNING | could not update source health | {e}")
 
     print("=" * 80)
-    print(f"V4.1 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.2 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
