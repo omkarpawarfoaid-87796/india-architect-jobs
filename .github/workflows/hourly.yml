@@ -1,4 +1,4 @@
-name: Hourly Architect Job Collector V4.3
+name: Hourly Architect Job Collector V4.3.1
 
 on:
   workflow_dispatch:
