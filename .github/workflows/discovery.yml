@@ -1,4 +1,4 @@
-name: Daily Architect Source Discovery V4.4
+name: Daily Architect Source Discovery V4.4.2
 
 on:
   workflow_dispatch:
@@ -47,3 +47,16 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SOURCES_TAB: Sources
         run: python ats_discovery.py
+
+- name: Validate showable output report
+  run: python report_output.py --self-test
+
+- name: Update showable discovery output
+  env:
+    GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+    GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    GOOGLE_SHEET_TAB: Sheet1
+    GOOGLE_META_TAB: _CollectorMeta
+    GOOGLE_SOURCES_TAB: Sources
+    GOOGLE_REPORT_TAB: AutomationOutput
+  run: python report_output.py --workflow daily-source-discovery
