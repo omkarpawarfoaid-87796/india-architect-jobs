@@ -1,4 +1,4 @@
-name: Fresh Architect Job Discovery V4.2
+name: Fresh Architect Job Discovery V4.3
 
 on:
   workflow_dispatch:
