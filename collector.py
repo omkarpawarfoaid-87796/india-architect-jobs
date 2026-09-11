@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/4.0 "
+    "ArchitectJobsCollector/4.1 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -269,6 +269,78 @@ def domain(url):
 def origin(url):
     p = urlparse(url)
     return f"{p.scheme}://{p.netloc}" if p.scheme and p.netloc else ""
+
+
+def company_name_from_domain(url):
+    """
+    Create a readable fallback company name from a public website domain.
+
+    This is used only when seeding the Sources registry before a company page
+    has been inspected. Discovery can later replace/augment this with the
+    actual site name.
+
+    Examples:
+      hingooarchitects.com   -> Hingoo Architects
+      shreedesigns.in        -> Shree Designs
+      hafeezcontractor.com   -> Hafeez Contractor
+    """
+    host = domain(url).lower()
+    if not host:
+        return ""
+
+    host = re.sub(r"^www\.", "", host)
+
+    # Drop common public suffixes. The exact company name is only a fallback,
+    # so we intentionally keep this dependency-free.
+    stem = host.split(".")[0]
+    stem = re.sub(r"[-_]+", " ", stem).strip()
+
+    # Split common architecture/design/business suffix words that are usually
+    # concatenated in domains.
+    suffixes = [
+        "architects",
+        "architecture",
+        "architect",
+        "contractor",
+        "contractors",
+        "designs",
+        "design",
+        "studio",
+        "studios",
+        "associates",
+        "consultants",
+        "consulting",
+        "interiors",
+        "interior",
+        "landscape",
+        "planning",
+        "planners",
+    ]
+
+    # Repeat because a domain can contain more than one recognizable token.
+    for _ in range(3):
+        previous = stem
+        for word in suffixes:
+            stem = re.sub(
+                rf"(?i)([a-z0-9])({re.escape(word)})$",
+                r"\1 \2",
+                stem,
+            )
+        if stem == previous:
+            break
+
+    stem = re.sub(r"\s+", " ", stem).strip()
+    if not stem:
+        return host
+
+    # Keep common acronyms readable.
+    words = []
+    for word in stem.split():
+        if len(word) <= 4 and word.isupper():
+            words.append(word)
+        else:
+            words.append(word[:1].upper() + word[1:])
+    return " ".join(words)
 
 
 def is_blocked_domain(url, cfg):
@@ -3279,7 +3351,12 @@ def self_test():
 
     assert _source_id("https://example.com/careers").startswith("SRC-")
 
-    print("SELF TEST PASSED: V4.0 validation, website schema, 500px logo and dynamic-source rules are working.")
+    # V4.1 regression: Sources seeding must always have a company-name fallback.
+    assert company_name_from_domain("https://hingooarchitects.com/careers") == "Hingoo Architects"
+    assert company_name_from_domain("https://www.shreedesigns.in/careers/") == "Shree Designs"
+    assert company_name_from_domain("https://www.hafeezcontractor.com/careers") == "Hafeez Contractor"
+
+    print("SELF TEST PASSED: V4.1 validation, source registry, 500px logo and dynamic-source rules are working.")
 
 
 def main():
@@ -3310,7 +3387,7 @@ def main():
             print(f"SOURCES WARNING | could not update source health | {e}")
 
     print("=" * 80)
-    print(f"V4.0 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.1 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
