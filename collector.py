@@ -15,13 +15,14 @@ import xml.etree.ElementTree as ET
 import requests
 import yaml
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
+from bs4.element import NavigableString, Tag
 from dateutil import parser as dateparser
 
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/2.0 "
+    "ArchitectJobsCollector/2.1 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -131,6 +132,26 @@ JOB_LINK_HINTS = (
     "job", "jobs", "career", "careers", "opening", "openings", "vacancy", "vacancies",
     "position", "positions", "opportunity", "opportunities", "recruit"
 )
+
+# Clean display names for seed employers whose metadata/domain names are compressed.
+# Unknown employers still fall back to their own Organization metadata or domain name.
+COMPANY_NAME_OVERRIDES = {
+    "abhikalpan.in": "Abhikalpan",
+    "uha.global": "UHA",
+    "hingooarchitects.com": "Hingoo Architects",
+    "daisaria.com": "Daisaria Associates",
+    "p-cdesigns.com": "P-C Designs",
+    "morphogenesis.org": "Morphogenesis",
+    "dhapl.in": "DHAPL",
+    "shreedesigns.in": "Shree Designs",
+    "studio-cplusc.com": "Studio C+P",
+    "apices.in": "Apices",
+    "hafeezcontractor.com": "Architect Hafeez Contractor",
+    "architecturebrio.com": "Architecture BRIO",
+    "studiolotus.in": "Studio Lotus",
+    "abindesignstudio.com": "Abin Design Studio",
+}
+
 
 
 def now_ist():
@@ -327,16 +348,23 @@ def job_category(title):
 
 
 def extract_job_type(text):
+    """Extract an employment type only when it is explicitly stated.
+
+    Word-boundary regexes are intentional: a company name such as
+    "Hafeez Contractor" must never be misclassified as a Contract job.
+    """
     low = (text or "").lower()
     mapping = [
-        ("Internship", ["internship", "intern "]),
-        ("Part Time", ["part-time", "part time"]),
-        ("Contract", ["contract", "freelance"]),
-        ("Full Time", ["full-time", "full time", "permanent"]),
+        ("Internship", [r"\binternship\b", r"\bintern\b"]),
+        ("Part Time", [r"\bpart[-\s]?time\b"]),
+        ("Contract", [r"\bcontract\b", r"\bcontractual\b", r"\bfreelance\b"]),
+        ("Full Time", [r"\bfull[-\s]?time\b", r"\bpermanent\b"]),
     ]
-    found = [label for label, terms in mapping if any(t in low for t in terms)]
+    found = []
+    for label, patterns in mapping:
+        if any(re.search(pattern, low, re.I) for pattern in patterns):
+            found.append(label)
     return ", ".join(found)
-
 
 def extract_experience(text):
     text = text or ""
@@ -375,34 +403,151 @@ def extract_skills(text, cfg):
     return ", ".join(found)
 
 
+def _image_candidate_url(tag, page_url):
+    """Return the best URL exposed by an <img> element."""
+    srcset = tag.get("srcset") or tag.get("data-srcset") or ""
+    if srcset:
+        items = []
+        for part in srcset.split(","):
+            bits = part.strip().split()
+            if not bits:
+                continue
+            url = bits[0]
+            weight = 0
+            if len(bits) > 1:
+                m = re.match(r"([\d.]+)(w|x)$", bits[1], re.I)
+                if m:
+                    weight = float(m.group(1)) * (1000 if m.group(2).lower() == "x" else 1)
+            items.append((weight, url))
+        if items:
+            items.sort(key=lambda x: x[0])
+            return canonical_url(urljoin(page_url, items[-1][1]))
+
+    for attr in ("data-src", "data-lazy-src", "data-original", "src"):
+        value = tag.get(attr)
+        if value and not str(value).lower().startswith("data:"):
+            return canonical_url(urljoin(page_url, str(value)))
+    return ""
+
+
+def _upgrade_logo_url(url):
+    """Remove obvious thumbnail transforms when the original asset URL is recoverable."""
+    if not url:
+        return ""
+    # Zyro/Cloudflare image transform used by one of the seed sites. A transformed
+    # w=16,h=16 URL is useless on a job card; the underlying path is higher quality.
+    url = re.sub(r"/cdn-cgi/image/[^/]+/", "/", url, flags=re.I)
+    return canonical_url(url)
+
+
+def _logo_score(url, label_text="", in_header=False, width=None, height=None, base=0):
+    low_url = (url or "").lower()
+    low_label = (label_text or "").lower()
+    score = base
+    if "logo" in low_url:
+        score += 22
+    if any(k in low_label for k in ("logo", "brand", "company")):
+        score += 35
+    if in_header:
+        score += 18
+    if low_url.endswith(".svg"):
+        score += 12
+    if "favicon" in low_url or "apple-touch-icon" in low_url:
+        score -= 55
+    if re.search(r"(?:^|[,?&_/])w=?(?:16|24|32)(?:[,?&_/]|$)", low_url):
+        score -= 45
+    if re.search(r"(?:^|[,?&_/])h=?(?:16|24|32)(?:[,?&_/]|$)", low_url):
+        score -= 45
+    try:
+        if width and int(re.sub(r"\D", "", str(width)) or 0) <= 40:
+            score -= 30
+        if height and int(re.sub(r"\D", "", str(height)) or 0) <= 40:
+            score -= 30
+    except Exception:
+        pass
+    return score
+
+
 def extract_logo(soup, page_url):
+    """Prefer a real company/header logo; use favicon only as last fallback."""
+    candidates = []
+
+    # Organization structured data is useful, but still score it for tiny thumbnails.
     for obj in jsonld_objects(soup):
         if type_contains(obj, "Organization"):
             logo = obj.get("logo")
             if isinstance(logo, dict):
                 logo = logo.get("url") or logo.get("contentUrl")
             if logo:
-                return canonical_url(urljoin(page_url, str(logo)))
-    link = soup.find("link", rel=lambda x: x and any("icon" in str(v).lower() for v in (x if isinstance(x, list) else [x])))
-    if link and link.get("href"):
-        return canonical_url(urljoin(page_url, link["href"]))
+                u = canonical_url(urljoin(page_url, str(logo)))
+                candidates.append((_logo_score(u, "organization logo", base=28), u))
+
+    # Actual visible images, especially inside header/nav, are often higher quality.
+    for img in soup.find_all("img"):
+        u = _image_candidate_url(img, page_url)
+        if not u:
+            continue
+        classes = " ".join(img.get("class") or [])
+        label = " ".join(
+            str(x) for x in (
+                img.get("alt", ""), img.get("title", ""), img.get("id", ""), classes
+            ) if x
+        )
+        in_header = bool(img.find_parent(["header", "nav"]))
+        score = _logo_score(
+            u,
+            label,
+            in_header=in_header,
+            width=img.get("width"),
+            height=img.get("height"),
+            base=8,
+        )
+        candidates.append((score, u))
+
+    # OpenGraph image is a reasonable fallback, but may be a hero image rather than logo.
     meta = soup.find("meta", attrs={"property": "og:image"})
     if meta and meta.get("content"):
-        return canonical_url(urljoin(page_url, meta["content"]))
-    return ""
+        u = canonical_url(urljoin(page_url, meta["content"]))
+        candidates.append((_logo_score(u, "og image", base=2), u))
+
+    # Favicons are deliberately last-resort.
+    for link in soup.find_all("link"):
+        rel = link.get("rel") or []
+        rel_text = " ".join(rel if isinstance(rel, list) else [str(rel)]).lower()
+        if "icon" in rel_text and link.get("href"):
+            u = canonical_url(urljoin(page_url, link["href"]))
+            candidates.append((_logo_score(u, "favicon", base=-20), u))
+
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return _upgrade_logo_url(candidates[0][1])
+
+
+def _normalise_company_display(name):
+    name = clean_text(name)
+    if not name:
+        return ""
+    # Gentle cleanup only; do not invent words for unknown employers.
+    name = re.sub(r"\s+", " ", name).strip(" -|,")
+    return name
 
 
 def extract_company_name(soup, page_url):
+    host = domain(page_url).lower()
+    host_no_www = host[4:] if host.startswith("www.") else host
+    if host_no_www in COMPANY_NAME_OVERRIDES:
+        return COMPANY_NAME_OVERRIDES[host_no_www]
+
     for obj in jsonld_objects(soup):
         if type_contains(obj, "Organization") and obj.get("name"):
-            return clean_text(obj.get("name"))
+            return _normalise_company_display(obj.get("name"))
     meta = soup.find("meta", attrs={"property": "og:site_name"})
     if meta and meta.get("content"):
-        return clean_text(meta["content"])
-    d = domain(page_url).split(".")
+        return _normalise_company_display(meta["content"])
+    d = host_no_www.split(".")
     core = d[-2] if len(d) >= 2 else (d[0] if d else "")
     return re.sub(r"[-_]", " ", core).title()
-
 
 def extract_title(soup):
     h1 = soup.find("h1")
@@ -792,34 +937,134 @@ def html_page_job(page_url, response_text, cfg, title_hint=""):
     return normalize_job(job, cfg)
 
 
+def _is_role_heading(tag, company, cfg):
+    if not isinstance(tag, Tag) or tag.name not in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return False
+    candidate = clean_title(tag.get_text(" ", strip=True), company)
+    return bool(candidate) and relevant_architecture_job(
+        {"title": candidate, "description": "", "skills": ""}, cfg
+    )
+
+
+def _job_section_text_from_heading(heading, company, cfg, max_chars=9000):
+    """Collect only this role's text until the next architecture-role heading.
+
+    This prevents a careers page containing several roles from copying the first
+    role's experience/description into every other row.
+    """
+    parts = []
+    seen = set()
+
+    title = clean_title(heading.get_text(" ", strip=True), company)
+    if title:
+        parts.append(title)
+        seen.add(title.lower())
+
+    for node in heading.next_elements:
+        if node is heading:
+            continue
+        if isinstance(node, Tag):
+            if node.name in {"script", "style", "noscript", "svg"}:
+                continue
+            if node is not heading and _is_role_heading(node, company, cfg):
+                break
+            continue
+        if not isinstance(node, NavigableString):
+            continue
+        parent = node.parent
+        if parent and getattr(parent, "name", None) in {"script", "style", "noscript", "svg"}:
+            continue
+        value = clean_text(str(node))
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(value)
+        if sum(len(p) + 1 for p in parts) >= max_chars:
+            break
+
+    return clean_text(" ".join(parts))[:max_chars]
+
+
+def _validation_text_for_inline_job(block_text, page_text, apply_url, method, cfg):
+    """Keep job-specific closed/deadline text, plus only global live-apply evidence."""
+    low_page = (page_text or "").lower()
+    open_evidence = [
+        signal for signal in cfg.get("open_signals", [])
+        if signal.lower() in low_page
+    ][:6]
+    return clean_text(" ".join([
+        block_text,
+        " ".join(open_evidence),
+        method or "",
+        apply_url or "",
+    ]))
+
+
 def inline_jobs_from_career_page(page_url, response_text, cfg):
     soup = BeautifulSoup(response_text, "html.parser")
     page_text = best_main_text(soup)
     company = extract_company_name(soup, page_url)
     logo = extract_logo(soup, page_url)
     results = []
+    seen_titles = set()
 
-    for heading in soup.find_all(["h2", "h3", "h4", "h5"]):
+    # A page-level apply route (form or HR email) can legitimately apply to every
+    # role on a careers page. We use it only as fallback if the role block has none.
+    page_apply_url, page_method, page_apply_email = find_apply_route(
+        soup, page_url, page_text, cfg
+    )
+    page_email, page_phone = extract_public_contacts(page_text)
+
+    for heading in soup.find_all(["h2", "h3", "h4", "h5", "h6"]):
         title = clean_title(heading.get_text(" ", strip=True), company)
-        if not relevant_architecture_job({"title": title, "description": "", "skills": ""}, cfg):
+        if not relevant_architecture_job(
+            {"title": title, "description": "", "skills": ""}, cfg
+        ):
             continue
 
-        # If heading links to a detail page, that page will be handled separately.
+        title_key = re.sub(r"\s+", " ", title.lower()).strip()
+        if not title_key or title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+
+        # If the heading itself is a link to a detail page, parse_page_for_jobs()
+        # will handle that page separately; avoid a duplicate careers-page row.
         linked = heading.find("a", href=True) or heading.find_parent("a", href=True)
         if linked:
+            href = canonical_url(urljoin(page_url, linked.get("href", "")))
+            if href and canonical_url(href) != canonical_url(page_url):
+                continue
+
+        block_text = _job_section_text_from_heading(heading, company, cfg)
+        if len(block_text) < len(title) + 8:
             continue
 
-        container = heading.find_parent(["article", "li", "section", "div"]) or heading.parent
-        block_text = clean_text(container.get_text(" ", strip=True) if container else heading.get_text())
-        if len(block_text) < len(title) + 10:
-            continue
-
-        apply_url, method, apply_email = find_apply_route(container if container else soup, page_url, block_text, cfg)
+        # Search the nearest semantic container for a role-specific apply control.
+        container = heading.find_parent(["article", "li", "section"]) or heading.parent or soup
+        apply_url, method, apply_email = find_apply_route(
+            container, page_url, block_text, cfg
+        )
+        if not apply_url:
+            apply_url, method, apply_email = (
+                page_apply_url, page_method, page_apply_email
+            )
         if not apply_url:
             continue
 
-        location, city, state, country = detect_location(block_text + " " + page_text[:4000])
-        email, phone = extract_public_contacts(block_text)
+        # Location may be stated once for the whole careers page, so block first,
+        # then fall back to the page context.
+        location, city, state, country = detect_location(block_text)
+        if not location:
+            location, city, state, country = detect_location(page_text[:12000])
+
+        block_email, block_phone = extract_public_contacts(block_text)
+        validation_text = _validation_text_for_inline_job(
+            block_text, page_text, apply_url, method, cfg
+        )
+
         job = {
             "title": title,
             "company": company,
@@ -841,15 +1086,14 @@ def inline_jobs_from_career_page(page_url, response_text, cfg):
             "application_method": method,
             "company_website": origin(page_url),
             "logo_url": logo,
-            "contact_email": email or apply_email,
-            "contact_phone": phone,
-            "page_text": block_text,
+            "contact_email": block_email or apply_email or page_email,
+            "contact_phone": block_phone or page_phone,
+            "page_text": validation_text,
         }
         normalized = normalize_job(job, cfg)
         if normalized:
             results.append(normalized)
     return results
-
 
 def extract_job_links(page_url, response_text, cfg):
     soup = BeautifulSoup(response_text, "html.parser")
