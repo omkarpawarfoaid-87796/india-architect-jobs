@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/2.2 "
+    "ArchitectJobsCollector/2.3 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -751,6 +751,164 @@ def page_has_open_signal(text, cfg):
     return any(signal.lower() in low for signal in cfg.get("open_signals", []))
 
 
+GENERIC_CAREER_PATHS = {
+    "career", "careers", "jobs", "job", "openings", "opening",
+    "open-positions", "open-position", "opportunities", "opportunity",
+    "join-us", "work-with-us", "vacancies", "vacancy",
+}
+
+
+def is_generic_careers_url(url):
+    """True for a generic careers/jobs landing page rather than a role page."""
+    if not url:
+        return True
+    path = (urlparse(url).path or "").strip("/").lower()
+    if not path:
+        return True
+    parts = [p for p in path.split("/") if p]
+    if not parts:
+        return True
+    last = parts[-1]
+    return last in GENERIC_CAREER_PATHS
+
+
+def _undated_detail_markers(description):
+    """Count job-specific detail markers in the vacancy text."""
+    low = (description or "").lower()
+    markers = (
+        "experience", "qualification", "qualifications", "requirements",
+        "responsibilities", "responsibility", "skills", "skill",
+        "b.arch", "bachelor", "degree", "diploma", "portfolio",
+        "proficient", "proficiency", "years", "yrs",
+        "job type", "location", "role", "duties",
+    )
+    return sum(1 for marker in markers if marker in low)
+
+
+def validate_undated_live_evidence(job, cfg):
+    """
+    V2.3 false-positive guard for jobs with no posted date.
+
+    A generic careers-page heading is NOT enough. An undated vacancy must show
+    role-specific evidence such as a substantial description/requirements,
+    experience/skills, a dedicated role page, a public form/email, or a future
+    application deadline.
+    """
+    job = job or {}
+    description = clean_text(job.get("description", ""))
+    page_text = clean_text(job.get("page_text", ""))
+    source_type = clean_text(job.get("source_type", "")).lower()
+    source_url = canonical_url(job.get("source_url", ""))
+    apply_url = canonical_url(job.get("apply_url", ""))
+    method = clean_text(job.get("application_method", ""))
+    experience = clean_text(job.get("experience", ""))
+    skills = clean_text(job.get("skills", ""))
+    deadline = job.get("deadline")
+    if not isinstance(deadline, date):
+        deadline = parse_date(deadline)
+
+    has_apply = bool(apply_url or method)
+    if not has_apply:
+        return False, "Undated vacancy has no public application route", 0
+
+    # A future application deadline is itself strong current-vacancy evidence.
+    if deadline and deadline >= now_ist().date():
+        return True, "", 10
+
+    desc_len = len(description)
+    marker_count = _undated_detail_markers(description)
+    dedicated_source = bool(source_url) and not is_generic_careers_url(source_url)
+    same_apply_page = bool(source_url and apply_url and source_url == apply_url)
+    structured_source = any(
+        token in source_type for token in ("json", "api", "ats", "lever", "greenhouse")
+    )
+    role_specific_open = page_has_open_signal(description, cfg)
+    page_open = page_has_open_signal(page_text, cfg)
+
+    score = 0
+    if structured_source:
+        score += 5
+    if dedicated_source:
+        score += 4
+    if desc_len >= 120:
+        score += 2
+    if desc_len >= 300:
+        score += 1
+    if marker_count >= 1:
+        score += 2
+    if marker_count >= 2:
+        score += 1
+    if experience:
+        score += 2
+    if skills:
+        score += 1
+    if method == "Public Form":
+        score += 2
+    elif method == "Email":
+        score += 1
+    elif method == "Apply Link":
+        score += 1
+    if apply_url and source_url and apply_url != source_url and not apply_url.startswith("mailto:"):
+        score += 2
+    if role_specific_open:
+        score += 1
+
+    # Hard guard: a short title/heading on a generic careers page with only a
+    # generic careers Apply link is not a verified vacancy.
+    min_chars = int(cfg.get("undated_min_description_chars", 100))
+    min_score = int(cfg.get("undated_min_evidence_score", 6))
+
+    weak_generic = (
+        is_generic_careers_url(source_url)
+        and desc_len < min_chars
+        and not experience
+        and not skills
+        and marker_count == 0
+    )
+    if weak_generic:
+        return (
+            False,
+            "Insufficient evidence of current vacancy: generic careers-page heading only",
+            score,
+        )
+
+    # Generic careers-page rows need actual role content, not just page-level
+    # "Open Positions" text. Public Form is strong, but still requires job detail.
+    if is_generic_careers_url(source_url) and not structured_source:
+        has_role_detail = (
+            desc_len >= min_chars
+            and (marker_count >= 1 or bool(experience) or bool(skills))
+        )
+        if not has_role_detail:
+            return (
+                False,
+                "Insufficient role-specific details for undated careers-page vacancy",
+                score,
+            )
+
+        if method == "Apply Link" and same_apply_page and score < (min_score + 1):
+            return (
+                False,
+                "Generic careers-page Apply link is not enough to verify an undated vacancy",
+                score,
+            )
+
+    # Dedicated role pages are allowed with slightly lower evidence because the
+    # dedicated URL itself is strong. Generic pages use the normal threshold.
+    threshold = max(4, min_score - 1) if dedicated_source else min_score
+    if score < threshold:
+        return (
+            False,
+            f"Insufficient live-vacancy evidence for undated job (score {score}/{threshold})",
+            score,
+        )
+
+    if not (page_open or role_specific_open or structured_source or dedicated_source):
+        return False, "No current-opening signal for undated vacancy", score
+
+    return True, "", score
+
+
 
 def find_apply_route(soup, page_url, page_text, cfg):
     """Find the best public application route without requiring authentication."""
@@ -822,7 +980,15 @@ def verify_apply_url(apply_url, source_url, page_text, cfg):
     return True, "", canonical_url(r.url)
 
 
-def validate_freshness(posted_date, deadline, page_text, apply_url, application_method, cfg):
+def validate_freshness(
+    posted_date,
+    deadline,
+    page_text,
+    apply_url,
+    application_method,
+    cfg,
+    job=None,
+):
     cutoff = minimum_date(cfg)
     today = now_ist().date()
 
@@ -839,12 +1005,23 @@ def validate_freshness(posted_date, deadline, page_text, apply_url, application_
         else:
             return True, "Fresh", "", posted_date
 
-    # No usable date: only accept when there is strong evidence it is a live vacancy.
+    # No usable posted date: V2.3 requires strong role-specific live evidence.
     if cfg.get("accept_undated_if_live_verified", True):
+        candidate = dict(job or {})
+        candidate.setdefault("page_text", page_text)
+        candidate.setdefault("apply_url", apply_url)
+        candidate.setdefault("application_method", application_method)
+        candidate.setdefault("deadline", deadline)
+
+        strong, strong_reason, score = validate_undated_live_evidence(candidate, cfg)
         has_open = page_has_open_signal(page_text, cfg)
         has_apply = bool(apply_url or application_method)
-        if has_open and has_apply:
-            return True, "Live Verified (No Posted Date)", "", None
+
+        if has_open and has_apply and strong:
+            return True, f"Live Verified (No Posted Date, Score {score})", "", None
+
+        if not strong:
+            return False, "Unverified", strong_reason, ""
 
     return False, "Unverified", "No acceptable posted date and insufficient live-opening evidence", ""
 
@@ -879,7 +1056,7 @@ def natural_job_key(job):
 
 
 def fingerprint(job):
-    # V2.2 fingerprints represent the vacancy itself, not the page URL. This
+    # V2.3 fingerprints represent the vacancy itself, not the page URL. This
     # prevents a careers-list row and a detail-page row becoming duplicates.
     base = natural_job_key(job)
     return hashlib.sha256(base.encode("utf-8")).hexdigest()[:24]
@@ -926,6 +1103,7 @@ def normalize_job(job, cfg):
         job.get("apply_url"),
         job.get("application_method"),
         cfg,
+        job=job,
     )
     if not accepted:
         return None
@@ -1900,6 +2078,29 @@ def revalidate_existing_record(record, cfg):
     if reason:
         return False, reason
 
+    # V2.3: previously accepted undated generic careers-page headings must
+    # prove that they are real, role-specific vacancies.
+    if not (posted or live_posted):
+        pseudo_job = {
+            "title": record.get("Job Title", ""),
+            "description": (
+                record.get("Full Description")
+                or record.get("Short Description")
+                or ""
+            ),
+            "experience": record.get("Experience", ""),
+            "skills": record.get("Skills", ""),
+            "source_type": record.get("Source Type", ""),
+            "source_url": record.get("Source URL", ""),
+            "apply_url": record.get("Apply URL", ""),
+            "application_method": record.get("Application Method", ""),
+            "deadline": live_deadline or deadline,
+            "page_text": text,
+        }
+        strong, strong_reason, _ = validate_undated_live_evidence(pseudo_job, cfg)
+        if not strong:
+            return False, strong_reason
+
     title = (record.get("Job Title") or "").strip()
     source_url = canonical_url(record.get("Source URL") or "")
     if title and canonical_url(url) == source_url and len(title) < 180:
@@ -1955,7 +2156,7 @@ def write_sheet(jobs, cfg):
             "values": [values],
         }
 
-    # Upsert current V2.2 jobs. Match old V2/V2.1 rows by natural vacancy key
+    # Upsert current V2.3 jobs. Match old V2/V2.1 rows by natural vacancy key
     # when their legacy fingerprint was URL-based.
     for job in jobs:
         fp = job["fingerprint"]
@@ -1983,7 +2184,7 @@ def write_sheet(jobs, cfg):
                     "Verified At": now_iso(),
                     "Application Status": "Closed",
                     "Status": "Closed",
-                    "Closed Reason": "Duplicate merged by V2.2",
+                    "Closed Reason": "Duplicate merged by V2.3",
                 }
                 queue_update(dup_row_num, record_to_row(headers, patch, dup_old_row))
                 touched_rows.add(dup_row_num)
@@ -2062,7 +2263,11 @@ def self_test():
         "city": "Mumbai",
         "state": "Maharashtra",
         "country": "India",
-        "description": "We are hiring a Junior Architect. Apply now. Revit AutoCAD.",
+        "description": (
+            "We are hiring a Junior Architect. Experience: 1-3 years. "
+            "Qualification: Bachelor's degree in Architecture. Requirements include "
+            "Revit and AutoCAD. Send your resume and portfolio to careers@example.com."
+        ),
         "skills": "",
         "apply_url": "mailto:careers@example.com",
         "application_method": "Email",
@@ -2088,7 +2293,7 @@ def self_test():
     closed = dict(base, posted_date=date(2026, 9, 5), deadline=None, page_text="This job has expired. Apply now.")
     assert normalize_job(closed, cfg) is None, "Closed signal must override freshness"
 
-    # V2.2 regression: old application deadlines such as Shree Designs' 2023
+    # V2.3 regression: old application deadlines such as Shree Designs' 2023
     # deadline must be detected even with ordinal suffix + 'Sept'.
     d = labeled_date_from_text(
         "Deadline for Applications: 30th Sept 2023 How to apply: email us",
@@ -2103,7 +2308,75 @@ def self_test():
     )
     assert normalize_job(stale_deadline, cfg) is None, "Expired deadline must reject undated job"
 
-    # V2.2 regression: careers list + detail page must dedupe to one vacancy.
+    # V2.3 regression: a weak undated generic careers-page heading such as
+    # "Junior Architect Site Supervisor Open Positions" must NOT be accepted.
+    weak_generic = dict(
+        base,
+        title="Junior Architect",
+        posted_date=None,
+        deadline=None,
+        source_type="HTML Inline",
+        source_url="https://example.com/careers",
+        apply_url="https://example.com/careers",
+        application_method="Apply Link",
+        description="Junior Architect Site Supervisor Open Positions",
+        page_text="Open Positions Apply Now",
+        experience="",
+        skills="",
+    )
+    assert normalize_job(weak_generic, cfg) is None, (
+        "Weak generic careers-page heading must be rejected"
+    )
+
+    # A real undated inline vacancy with role-specific experience/qualification
+    # and a public form should remain accepted.
+    strong_inline = dict(
+        base,
+        title="Junior Architect",
+        posted_date=None,
+        deadline=None,
+        source_type="HTML Inline",
+        source_url="https://example.com/careers",
+        apply_url="https://example.com/careers",
+        application_method="Public Form",
+        description=(
+            "Junior Architect Experience: 1-3 years in an architectural firm. "
+            "Qualification: Bachelor's degree in Architecture (B.Arch). "
+            "Submit your application using the form below."
+        ),
+        page_text="Current openings. Submit your application.",
+        experience="1-3 years",
+        skills="",
+    )
+    assert normalize_job(strong_inline, cfg) is not None, (
+        "Substantive undated public-form vacancy should be accepted"
+    )
+
+    # A dedicated role page with substantial requirements is also valid even
+    # when the employer does not publish a posting date.
+    dedicated_undated = dict(
+        base,
+        title="Architect",
+        posted_date=None,
+        deadline=None,
+        source_type="HTML",
+        source_url="https://example.com/careers-architect",
+        apply_url="mailto:careers@example.com",
+        application_method="Email",
+        description=(
+            "Architect responsibilities include concept design, drawings and "
+            "consultant coordination. Requirements: B.Arch and 3-5 years of "
+            "experience. Send your resume and portfolio to careers@example.com."
+        ),
+        page_text="We are hiring. Send your resume to careers@example.com.",
+        experience="3-5 years",
+        skills="AutoCAD",
+    )
+    assert normalize_job(dedicated_undated, cfg) is not None, (
+        "Dedicated undated role page with substantive evidence should be accepted"
+    )
+
+    # V2.3 regression: careers list + detail page must dedupe to one vacancy.
     a = dict(base, title="Junior Architect (0-2 Years of Experience)", source_type="HTML Inline", source_url="https://example.com/careers")
     b = dict(base, title="Junior Architect", source_type="HTML", source_url="https://example.com/careers-junior-architect")
     a["fingerprint"] = fingerprint(a)
@@ -2121,7 +2394,7 @@ def self_test():
     # Mojibake repair.
     assert "you’re" in clean_text("If youâ€™re interested").lower()
 
-    print("SELF TEST PASSED: V2.2 freshness, deadline, dedupe, contact, encoding and job-type rules are working.")
+    print("SELF TEST PASSED: V2.3 freshness, strong undated validation, deadline, dedupe, contact, encoding and job-type rules are working.")
 
 
 def main():
@@ -2136,7 +2409,7 @@ def main():
     cfg = load_config()
     jobs, reports = scan_all_sources(cfg)
     print("=" * 80)
-    print(f"V2.2 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V2.3 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
