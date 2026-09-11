@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/4.3 "
+    "ArchitectJobsCollector/4.3.1 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -3361,7 +3361,7 @@ def self_test():
     assert exported["external_id"] == ""
     assert "quality_reason" in SOURCE_HEADERS
 
-    print("SELF TEST PASSED: V4.3 validation, blank external_id, source quality registry, 500px logo and dynamic-source rules are working.")
+    print("SELF TEST PASSED: V4.3.1 validation, blank external_id, refined source quality, 500px logo and dynamic-source rules are working.")
 
 
 def main():
@@ -3392,7 +3392,7 @@ def main():
             print(f"SOURCES WARNING | could not update source health | {e}")
 
     print("=" * 80)
-    print(f"V4.3 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.3.1 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
