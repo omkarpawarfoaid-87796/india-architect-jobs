@@ -1146,35 +1146,187 @@ def column_letter(n):
     return s
 
 
+def get_sheet_properties(service, spreadsheet_id, tab, create_if_missing=True):
+    """Return Google Sheet tab properties; create the tab if it does not exist."""
+    metadata = service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))",
+    ).execute()
+
+    for sheet in metadata.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("title") == tab:
+            return props
+
+    if not create_if_missing:
+        raise RuntimeError(f"Google Sheet tab not found: {tab}")
+
+    # Create a sufficiently wide tab so future V2 fields do not immediately
+    # run into the default Google Sheets column limit.
+    response = service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [
+                {
+                    "addSheet": {
+                        "properties": {
+                            "title": tab,
+                            "gridProperties": {
+                                "rowCount": 1000,
+                                "columnCount": max(40, len(V2_HEADERS)),
+                            },
+                        }
+                    }
+                }
+            ]
+        },
+    ).execute()
+
+    try:
+        return response["replies"][0]["addSheet"]["properties"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Unable to create Google Sheet tab: {tab}") from exc
+
+
+def ensure_sheet_columns(service, spreadsheet_id, tab, required_columns):
+    """Expand the worksheet when more columns are required."""
+    props = get_sheet_properties(
+        service,
+        spreadsheet_id,
+        tab,
+        create_if_missing=True,
+    )
+
+    current_columns = int(
+        props.get("gridProperties", {}).get("columnCount", 0) or 0
+    )
+
+    if current_columns >= required_columns:
+        return current_columns
+
+    columns_to_add = required_columns - current_columns
+
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [
+                {
+                    "appendDimension": {
+                        "sheetId": props["sheetId"],
+                        "dimension": "COLUMNS",
+                        "length": columns_to_add,
+                    }
+                }
+            ]
+        },
+    ).execute()
+
+    print(
+        f"Expanded Google Sheet '{tab}' from "
+        f"{current_columns} to {required_columns} columns"
+    )
+    return required_columns
+
+
 def read_sheet_values(service, sheet_id, tab):
-    return service.spreadsheets().values().get(
-        spreadsheetId=sheet_id, range=f"'{tab}'!A:ZZ"
-    ).execute().get("values", [])
+    """Read only the columns that physically exist in the worksheet."""
+    props = get_sheet_properties(
+        service,
+        sheet_id,
+        tab,
+        create_if_missing=True,
+    )
+    column_count = int(
+        props.get("gridProperties", {}).get("columnCount", 1) or 1
+    )
+    end_col = column_letter(max(1, column_count))
+
+    return (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=sheet_id,
+            range=f"'{tab}'!A:{end_col}",
+        )
+        .execute()
+        .get("values", [])
+    )
 
 
 def ensure_headers(service, sheet_id, tab):
+    """
+    Keep existing columns, append missing V2 columns and automatically
+    expand the Google Sheet before writing beyond its current grid size.
+    """
+    # Ensure the tab exists before trying to read it.
+    get_sheet_properties(
+        service,
+        sheet_id,
+        tab,
+        create_if_missing=True,
+    )
+
     values = read_sheet_values(service, sheet_id, tab)
+
+    # Empty worksheet: create all V2 headers.
     if not values:
+        ensure_sheet_columns(
+            service,
+            sheet_id,
+            tab,
+            len(V2_HEADERS),
+        )
+
         service.spreadsheets().values().update(
             spreadsheetId=sheet_id,
-            range=f"'{tab}'!A1",
+            range=f"'{tab}'!A1:{column_letter(len(V2_HEADERS))}1",
             valueInputOption="RAW",
             body={"values": [V2_HEADERS]},
         ).execute()
+
+        print(
+            f"Created {len(V2_HEADERS)} V2 headers "
+            f"in Google Sheet tab '{tab}'"
+        )
         return V2_HEADERS[:]
 
     headers = values[0][:]
-    missing = [h for h in V2_HEADERS if h not in headers]
+
+    # Keep legacy V1 columns, but append every V2 column that is missing.
+    missing = [header for header in V2_HEADERS if header not in headers]
+
     if missing:
-        start = len(headers) + 1
-        end = start + len(missing) - 1
+        required_columns = len(headers) + len(missing)
+
+        # This is the important V2 fix: Google Sheets starts with a finite
+        # column grid. Expand it BEFORE writing headers such as AB:AH.
+        ensure_sheet_columns(
+            service,
+            sheet_id,
+            tab,
+            required_columns,
+        )
+
+        start_col_number = len(headers) + 1
+        end_col_number = required_columns
+
+        start_col = column_letter(start_col_number)
+        end_col = column_letter(end_col_number)
+
         service.spreadsheets().values().update(
             spreadsheetId=sheet_id,
-            range=f"'{tab}'!{column_letter(start)}1:{column_letter(end)}1",
+            range=f"'{tab}'!{start_col}1:{end_col}1",
             valueInputOption="RAW",
             body={"values": [missing]},
         ).execute()
+
         headers.extend(missing)
+
+        print(
+            f"Added {len(missing)} missing V2 columns "
+            f"to Google Sheet tab '{tab}'"
+        )
+
     return headers
 
 
