@@ -1,0 +1,50 @@
+name: Fresh Architect Job Discovery V4.2
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "42 */3 * * *"
+
+concurrency:
+  group: fresh-architect-job-discovery-v42
+  cancel-in-progress: false
+
+jobs:
+  fresh-jobs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate collector
+        run: python collector.py --self-test
+
+      - name: Validate fresh job discovery
+        run: python fresh_jobs.py --self-test
+
+      - name: Discover fresh public job sources
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SOURCES_TAB: Sources
+        run: python fresh_jobs.py
+
+      - name: Refresh website jobs immediately
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_TAB: Sheet1
+          GOOGLE_META_TAB: _CollectorMeta
+          GOOGLE_SOURCES_TAB: Sources
+        run: python collector.py
