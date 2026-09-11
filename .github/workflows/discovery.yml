@@ -1,4 +1,4 @@
-name: Daily Architect Source Discovery V4.3.1
+name: Daily Architect Source Discovery V4.4
 
 on:
   workflow_dispatch:
@@ -37,3 +37,13 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SOURCES_TAB: Sources
         run: python discovery.py
+
+      - name: Validate ATS discovery
+        run: python ats_discovery.py --self-test
+
+      - name: Discover public ATS boards
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SOURCES_TAB: Sources
+        run: python ats_discovery.py
