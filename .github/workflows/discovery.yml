@@ -1,0 +1,39 @@
+name: Daily Architect Source Discovery V4
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 20:35 UTC = 02:05 IST the following day
+    - cron: "35 20 * * *"
+
+concurrency:
+  group: architect-source-discovery-v4
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate discovery
+        run: python discovery.py --self-test
+
+      - name: Discover public architecture career sources
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SOURCES_TAB: Sources
+        run: python discovery.py
