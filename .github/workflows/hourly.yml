@@ -1,4 +1,4 @@
-name: Hourly Architect Job Collector V4.4
+name: Hourly Architect Job Collector V4.4.2
 
 on:
   workflow_dispatch:
@@ -27,10 +27,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Validate V4.4 rules
+      - name: Validate V4.4.2 rules
         run: python collector.py --self-test
 
-      - name: Run V4.4 collector
+      - name: Run V4.4.2 collector
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -38,3 +38,16 @@ jobs:
           GOOGLE_META_TAB: _CollectorMeta
           GOOGLE_SOURCES_TAB: Sources
         run: python collector.py
+
+- name: Validate showable output report
+  run: python report_output.py --self-test
+
+- name: Update showable automation output
+  env:
+    GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+    GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    GOOGLE_SHEET_TAB: Sheet1
+    GOOGLE_META_TAB: _CollectorMeta
+    GOOGLE_SOURCES_TAB: Sources
+    GOOGLE_REPORT_TAB: AutomationOutput
+  run: python report_output.py --workflow hourly-collector
