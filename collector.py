@@ -8,7 +8,7 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone, timedelta
-from urllib.parse import urljoin, urlparse, urldefrag
+from urllib.parse import urljoin, urlparse, urldefrag, quote
 from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
 
@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/3.1 "
+    "ArchitectJobsCollector/4.0 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -2340,6 +2340,51 @@ def rolling_expiry_date(real_deadline, cfg):
 
 
 
+
+def normalized_logo_500_url(raw_url, cfg):
+    """
+    Return a 500x500 contained logo URL without stretching the logo.
+
+    V4 uses wsrv.nl's public image-resize endpoint by default:
+      - width 500
+      - height 500
+      - fit=contain
+      - transparent letterbox background
+      - PNG output
+
+    Set logo_500_proxy_enabled: false to keep the original source URL.
+    """
+    raw_url = canonical_url(raw_url)
+    if not raw_url:
+        return ""
+
+    if not cfg.get("logo_500_proxy_enabled", True):
+        return raw_url
+
+    # Avoid nesting the proxy if the sheet row is re-exported.
+    if "wsrv.nl/?" in raw_url.lower():
+        return raw_url
+
+    base = clean_text(cfg.get("logo_proxy_base_url", "https://wsrv.nl/"))
+    if not base:
+        return raw_url
+
+    size = int(cfg.get("logo_size_px", 500))
+    size = max(100, min(size, 1000))
+    transparent = clean_text(cfg.get("logo_transparent_background", "00FFFFFF")) or "00FFFFFF"
+
+    separator = "&" if "?" in base else "?"
+    return (
+        f"{base}{separator}"
+        f"url={quote(raw_url, safe='')}"
+        f"&w={size}&h={size}"
+        f"&fit=contain"
+        f"&cbg={transparent}"
+        f"&output=png"
+    )
+
+
+
 def website_record_from_meta(record, cfg):
     """Map one verified internal collector row to the developer's exact schema."""
     title = clean_text(record.get("Job Title") or "")
@@ -2430,7 +2475,7 @@ def website_record_from_meta(record, cfg):
         "qualification": extract_qualification_for_export(description),
         "career_level": career_level_for_export(title, experience),
         "video_url": "",
-        "logo_url": clean_text(record.get("Logo URL") or ""),
+        "logo_url": normalized_logo_500_url(record.get("Logo URL") or "", cfg),
     }
 
 def clear_sheet_tab(service, spreadsheet_id, tab):
@@ -2755,6 +2800,259 @@ def write_sheet(jobs, cfg):
     return new_count, updated_count, closed_count, export_count
 
 
+
+SOURCE_HEADERS = [
+    "source_id",
+    "company_name",
+    "company_website",
+    "career_url",
+    "city",
+    "state",
+    "source_type",
+    "discovered_from",
+    "first_discovered",
+    "last_checked",
+    "last_success",
+    "jobs_found",
+    "consecutive_failures",
+    "status",
+]
+
+
+def _source_id(url):
+    return "SRC-" + hashlib.sha1(
+        canonical_url(url).lower().encode("utf-8")
+    ).hexdigest()[:12].upper()
+
+
+def ensure_sources_sheet(service, spreadsheet_id, tab):
+    get_sheet_properties(service, spreadsheet_id, tab, create_if_missing=True)
+    ensure_sheet_columns(service, spreadsheet_id, tab, len(SOURCE_HEADERS))
+    values = read_sheet_values(service, spreadsheet_id, tab)
+    if not values:
+        service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab}'!A1:{column_letter(len(SOURCE_HEADERS))}1",
+            valueInputOption="RAW",
+            body={"values": [SOURCE_HEADERS]},
+        ).execute()
+        return SOURCE_HEADERS[:]
+    headers = values[0][:]
+    missing = [h for h in SOURCE_HEADERS if h not in headers]
+    if missing:
+        ensure_sheet_columns(
+            service,
+            spreadsheet_id,
+            tab,
+            len(headers) + len(missing),
+        )
+        start = len(headers) + 1
+        end = len(headers) + len(missing)
+        service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab}'!{column_letter(start)}1:{column_letter(end)}1",
+            valueInputOption="RAW",
+            body={"values": [missing]},
+        ).execute()
+        headers.extend(missing)
+    return headers
+
+
+def seed_sources_registry(service, spreadsheet_id, tab, cfg):
+    """Put config seed sources into Sources once, without duplicating them."""
+    headers = ensure_sources_sheet(service, spreadsheet_id, tab)
+    values = read_sheet_values(service, spreadsheet_id, tab)
+    existing = set()
+    if values:
+        for row in values[1:]:
+            rec = row_to_record(headers, row)
+            u = canonical_url(rec.get("career_url") or "")
+            if u:
+                existing.add(u)
+
+    new_rows = []
+    stamp = now_ist().isoformat(timespec="seconds")
+    for url in cfg.get("career_pages", []):
+        url = canonical_url(url)
+        if not url or url in existing:
+            continue
+        host = domain(url).replace("www.", "")
+        company = company_name_from_domain(url)
+        row = {
+            "source_id": _source_id(url),
+            "company_name": company,
+            "company_website": origin(url),
+            "career_url": url,
+            "city": "",
+            "state": "",
+            "source_type": "Seed Website",
+            "discovered_from": "config.yaml seed",
+            "first_discovered": stamp,
+            "last_checked": "",
+            "last_success": "",
+            "jobs_found": "0",
+            "consecutive_failures": "0",
+            "status": "Active",
+        }
+        new_rows.append([row.get(h, "") for h in headers])
+        existing.add(url)
+
+    if new_rows:
+        service.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab}'!A:{column_letter(len(headers))}",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": new_rows},
+        ).execute()
+        print(f"Sources registry seeded with {len(new_rows)} configured sources")
+
+
+def load_dynamic_sources(cfg):
+    """
+    Load Active sources from the Sources tab and return a rotating hourly batch.
+
+    Selection is based on oldest last_checked first so a large source library can
+    be covered over time without making every hourly run too expensive.
+    """
+    sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
+    raw_creds = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    if not sheet_id or not raw_creds:
+        return []
+
+    tab = os.environ.get("GOOGLE_SOURCES_TAB", "Sources")
+    svc = sheet_service()
+    headers = ensure_sources_sheet(svc, sheet_id, tab)
+    seed_sources_registry(svc, sheet_id, tab, cfg)
+    values = read_sheet_values(svc, sheet_id, tab)
+
+    rows = []
+    for row in values[1:] if values else []:
+        rec = row_to_record(headers, row)
+        status = clean_text(rec.get("status") or "Active").lower()
+        url = canonical_url(rec.get("career_url") or "")
+        if not url or status not in ("active", "warning", "new"):
+            continue
+
+        checked = parse_existing_date(rec.get("last_checked") or "")
+        # Full timestamp sort key retained separately when parseable.
+        raw_checked = clean_text(rec.get("last_checked") or "")
+        try:
+            checked_dt = dateparser.parse(raw_checked) if raw_checked else None
+        except Exception:
+            checked_dt = None
+
+        jobs_found = 0
+        try:
+            jobs_found = int(float(rec.get("jobs_found") or 0))
+        except Exception:
+            pass
+
+        rows.append(
+            (
+                checked_dt or datetime(1970, 1, 1, tzinfo=IST),
+                -jobs_found,
+                url,
+            )
+        )
+
+    rows.sort(key=lambda x: (x[0], x[1], x[2]))
+    limit = int(cfg.get("hourly_source_batch_size", 80))
+    limit = max(1, min(limit, 500))
+    return [u for _, _, u in rows[:limit]]
+
+
+def merge_registry_sources(cfg):
+    """Merge seed config sources with the due batch from Sources."""
+    dynamic = load_dynamic_sources(cfg)
+    merged = []
+    seen = set()
+
+    # Dynamic due sources first, then seeds as safety fallback.
+    for url in dynamic + list(cfg.get("career_pages", [])):
+        url = canonical_url(url)
+        if url and url not in seen:
+            seen.add(url)
+            merged.append(url)
+
+    # At scale, do not let seed fallback defeat batching.
+    if dynamic:
+        seed_set = {canonical_url(x) for x in cfg.get("career_pages", [])}
+        due = dynamic[:]
+        # Ensure current original seeds are always checked while the registry is small.
+        if len(dynamic) <= int(cfg.get("hourly_source_batch_size", 80)):
+            for u in seed_set:
+                if u and u not in due:
+                    due.append(u)
+        merged = due
+
+    cfg = dict(cfg)
+    cfg["career_pages"] = merged
+    return cfg
+
+
+def update_sources_from_reports(reports, cfg):
+    """Write source health/job counts back to Sources after the hourly scan."""
+    sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
+    raw_creds = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    if not sheet_id or not raw_creds or not reports:
+        return
+
+    tab = os.environ.get("GOOGLE_SOURCES_TAB", "Sources")
+    svc = sheet_service()
+    headers = ensure_sources_sheet(svc, sheet_id, tab)
+    values = read_sheet_values(svc, sheet_id, tab)
+    if not values:
+        return
+
+    by_url = {}
+    for idx, row in enumerate(values[1:], start=2):
+        rec = row_to_record(headers, row)
+        url = canonical_url(rec.get("career_url") or "")
+        if url:
+            by_url[url] = (idx, rec)
+
+    stamp = now_ist().isoformat(timespec="seconds")
+    disable_after = int(cfg.get("source_disable_after_failures", 8))
+    updates = []
+
+    for report in reports:
+        url = canonical_url(report.get("source") or "")
+        if not url or url not in by_url:
+            continue
+        row_num, rec = by_url[url]
+        rec["last_checked"] = stamp
+        ok = bool(report.get("ok"))
+        if ok:
+            rec["last_success"] = stamp
+            rec["jobs_found"] = str(int(report.get("qualified_jobs", 0) or 0))
+            rec["consecutive_failures"] = "0"
+            rec["status"] = "Active"
+        else:
+            try:
+                failures = int(float(rec.get("consecutive_failures") or 0)) + 1
+            except Exception:
+                failures = 1
+            rec["consecutive_failures"] = str(failures)
+            rec["status"] = "Inactive" if failures >= disable_after else "Warning"
+
+        row_values = [rec.get(h, "") for h in headers]
+        updates.append(
+            {
+                "range": f"'{tab}'!A{row_num}:{column_letter(len(headers))}{row_num}",
+                "values": [row_values],
+            }
+        )
+
+    if updates:
+        svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={"valueInputOption": "RAW", "data": updates},
+        ).execute()
+        print(f"Sources registry updated for {len(updates)} checked sources")
+
+
+
 def load_config():
     with open("config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -2972,7 +3270,16 @@ def self_test():
         "Qualification: Bachelor's degree in Architecture (B.Arch)"
     ) == "Bachelor's degree in Architecture (B.Arch)"
 
-    print("SELF TEST PASSED: V3.1 qualification, clean description, category and rolling-expiry rules are working.")
+    logo = normalized_logo_500_url(
+        "https://example.com/company-logo.svg",
+        cfg,
+    )
+    assert "w=500" in logo and "h=500" in logo
+    assert "fit=contain" in logo and "output=png" in logo
+
+    assert _source_id("https://example.com/careers").startswith("SRC-")
+
+    print("SELF TEST PASSED: V4.0 validation, website schema, 500px logo and dynamic-source rules are working.")
 
 
 def main():
@@ -2985,9 +3292,25 @@ def main():
         return
 
     cfg = load_config()
+
+    # V4: pull the oldest-due public career pages from the Sources registry.
+    if os.environ.get("DRY_RUN", "").lower() not in ("1", "true", "yes"):
+        try:
+            cfg = merge_registry_sources(cfg)
+            print(f"V4 active source batch: {len(cfg.get('career_pages', []))} websites")
+        except Exception as e:
+            print(f"SOURCES WARNING | registry unavailable, using config seeds | {e}")
+
     jobs, reports = scan_all_sources(cfg)
+
+    if os.environ.get("DRY_RUN", "").lower() not in ("1", "true", "yes"):
+        try:
+            update_sources_from_reports(reports, cfg)
+        except Exception as e:
+            print(f"SOURCES WARNING | could not update source health | {e}")
+
     print("=" * 80)
-    print(f"V3.1 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.0 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
