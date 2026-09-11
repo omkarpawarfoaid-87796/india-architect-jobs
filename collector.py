@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/2.1 "
+    "ArchitectJobsCollector/2.2 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -162,6 +162,32 @@ def now_iso():
     return now_ist().isoformat(timespec="seconds")
 
 
+
+def _repair_mojibake(value):
+    """Repair common UTF-8 text that was accidentally decoded as Windows-1252."""
+    if not isinstance(value, str) or not value:
+        return value
+    out = value
+    suspicious = ("â€", "â€™", "â€œ", "â€�", "â€“", "â€”", "Ã", "Â", "ðŸ")
+    for _ in range(2):
+        if not any(marker in out for marker in suspicious):
+            break
+        try:
+            repaired = out.encode("cp1252").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            break
+        if repaired == out:
+            break
+        out = repaired
+    replacements = {
+        "â€™": "’", "â€˜": "‘", "â€œ": "“", "â€�": "”",
+        "â€“": "–", "â€”": "—", "Â·": "·", "Â": "",
+    }
+    for bad, good in replacements.items():
+        out = out.replace(bad, good)
+    return out
+
+
 def clean_text(value):
     if value is None:
         return ""
@@ -169,8 +195,10 @@ def clean_text(value):
         return ", ".join(x for x in (clean_text(v) for v in value) if x)
     if isinstance(value, dict):
         return clean_text(value.get("name") or value.get("value") or "")
-    text = BeautifulSoup(str(value), "html.parser").get_text(" ", strip=True)
-    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+    raw = _repair_mojibake(str(value))
+    cleaned = BeautifulSoup(raw, "html.parser").get_text(" ", strip=True)
+    cleaned = _repair_mojibake(html.unescape(cleaned))
+    return re.sub(r"\s+", " ", cleaned.replace("\xa0", " ")).strip()
 
 
 def canonical_url(url):
@@ -250,14 +278,49 @@ def minimum_date(cfg):
     return d
 
 
+
+def _email_priority(email):
+    local = (email or "").split("@", 1)[0].lower()
+    if any(k in local for k in ("careers", "career", "jobs", "recruit", "talent", "hiring")):
+        return 0
+    if local in {"hr", "humanresources", "human.resources"} or local.startswith("hr.") or local.startswith("hr-"):
+        return 1
+    if any(k in local for k in ("people", "team")):
+        return 2
+    if any(k in local for k in ("hello", "contact", "info", "office")):
+        return 5
+    if any(k in local for k in ("press", "media", "exec", "admin")):
+        return 9
+    return 6
+
+
+def _best_email(emails):
+    unique = []
+    seen = set()
+    for email in emails or []:
+        email = (email or "").strip().lower()
+        if not email or email in seen:
+            continue
+        seen.add(email)
+        unique.append(email)
+    if not unique:
+        return ""
+    unique.sort(key=lambda e: (_email_priority(e), len(e), e))
+    return unique[0]
+
+
 def extract_public_contacts(text):
-    text = text or ""
+    text = clean_text(text or "")
     emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
-    emails = [e for e in emails if not e.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".svg"))]
+    emails = [
+        e for e in emails
+        if not e.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".svg"))
+    ]
 
     compact = re.sub(r"[\s().-]+", "", text)
     phones = re.findall(r"(?:\+91)?[6-9]\d{9}", compact)
-    return (emails[0] if emails else ""), (phones[0] if phones else "")
+    phone = phones[0] if phones else ""
+    return _best_email(emails), phone
 
 
 def jsonld_objects(soup):
@@ -347,24 +410,48 @@ def job_category(title):
     return "Architecture / Design"
 
 
-def extract_job_type(text):
-    """Extract an employment type only when it is explicitly stated.
 
-    Word-boundary regexes are intentional: a company name such as
-    "Hafeez Contractor" must never be misclassified as a Contract job.
+def extract_job_type(text):
+    """Return employment type only when the source states it as a job type.
+
+    This intentionally avoids treating phrases such as "previous internship
+    experience" or a company name containing "Contractor" as employment type.
     """
-    low = (text or "").lower()
-    mapping = [
-        ("Internship", [r"\binternship\b", r"\bintern\b"]),
-        ("Part Time", [r"\bpart[-\s]?time\b"]),
-        ("Contract", [r"\bcontract\b", r"\bcontractual\b", r"\bfreelance\b"]),
-        ("Full Time", [r"\bfull[-\s]?time\b", r"\bpermanent\b"]),
-    ]
-    found = []
-    for label, patterns in mapping:
-        if any(re.search(pattern, low, re.I) for pattern in patterns):
-            found.append(label)
+    value = clean_text(text or "")
+    low = value.lower()
+
+    labels = re.findall(
+        r"(?:job|employment|position)\s*type\s*[:\-]?\s*([^.;|]{1,80})",
+        value,
+        flags=re.I,
+    )
+    search_space = " ".join(labels) if labels else ""
+
+    # Strong explicit phrases can be accepted even without a label.
+    explicit = []
+    if re.search(r"\bfull[-\s]?time\s+(?:role|position|job|opening)\b", low):
+        explicit.append("Full Time")
+    if re.search(r"\bpart[-\s]?time\s+(?:role|position|job|opening)\b", low):
+        explicit.append("Part Time")
+    if re.search(r"\b(?:contract|contractual|freelance)\s+(?:role|position|job|opening)\b", low):
+        explicit.append("Contract")
+    if re.search(r"\bintern(?:ship)?\s+(?:role|position|job|opening)\b", low):
+        explicit.append("Internship")
+
+    found = list(explicit)
+    target = search_space.lower()
+    if target:
+        mapping = [
+            ("Internship", r"\bintern(?:ship)?\b"),
+            ("Part Time", r"\bpart[-\s]?time\b"),
+            ("Contract", r"\b(?:contract|contractual|freelance)\b"),
+            ("Full Time", r"\b(?:full[-\s]?time|permanent)\b"),
+        ]
+        for label, pattern in mapping:
+            if re.search(pattern, target, re.I) and label not in found:
+                found.append(label)
     return ", ".join(found)
+
 
 def extract_experience(text):
     text = text or ""
@@ -468,11 +555,12 @@ def _logo_score(url, label_text="", in_header=False, width=None, height=None, ba
     return score
 
 
-def extract_logo(soup, page_url):
-    """Prefer a real company/header logo; use favicon only as last fallback."""
-    candidates = []
 
-    # Organization structured data is useful, but still score it for tiny thumbnails.
+def extract_logo(soup, page_url):
+    """Prefer a genuine company logo and never use a generic hero/building image."""
+    strong = []
+    fallback_icons = []
+
     for obj in jsonld_objects(soup):
         if type_contains(obj, "Organization"):
             logo = obj.get("logo")
@@ -480,48 +568,43 @@ def extract_logo(soup, page_url):
                 logo = logo.get("url") or logo.get("contentUrl")
             if logo:
                 u = canonical_url(urljoin(page_url, str(logo)))
-                candidates.append((_logo_score(u, "organization logo", base=28), u))
+                strong.append((_logo_score(u, "organization logo", base=35), u))
 
-    # Actual visible images, especially inside header/nav, are often higher quality.
     for img in soup.find_all("img"):
         u = _image_candidate_url(img, page_url)
         if not u:
             continue
         classes = " ".join(img.get("class") or [])
         label = " ".join(
-            str(x) for x in (
-                img.get("alt", ""), img.get("title", ""), img.get("id", ""), classes
-            ) if x
+            str(x) for x in (img.get("alt", ""), img.get("title", ""), img.get("id", ""), classes) if x
         )
+        low_url = u.lower()
+        low_label = label.lower()
         in_header = bool(img.find_parent(["header", "nav"]))
-        score = _logo_score(
-            u,
-            label,
-            in_header=in_header,
-            width=img.get("width"),
-            height=img.get("height"),
-            base=8,
+        logo_like = (
+            "logo" in low_url
+            or any(k in low_label for k in ("logo", "brand", "company logo"))
         )
-        candidates.append((score, u))
+        if not logo_like:
+            # Do not let architectural/project hero photography become the company logo.
+            continue
+        score = _logo_score(
+            u, label, in_header=in_header,
+            width=img.get("width"), height=img.get("height"), base=15,
+        )
+        strong.append((score, u))
 
-    # OpenGraph image is a reasonable fallback, but may be a hero image rather than logo.
-    meta = soup.find("meta", attrs={"property": "og:image"})
-    if meta and meta.get("content"):
-        u = canonical_url(urljoin(page_url, meta["content"]))
-        candidates.append((_logo_score(u, "og image", base=2), u))
-
-    # Favicons are deliberately last-resort.
     for link in soup.find_all("link"):
         rel = link.get("rel") or []
         rel_text = " ".join(rel if isinstance(rel, list) else [str(rel)]).lower()
         if "icon" in rel_text and link.get("href"):
             u = canonical_url(urljoin(page_url, link["href"]))
-            candidates.append((_logo_score(u, "favicon", base=-20), u))
+            fallback_icons.append(u)
 
-    if not candidates:
-        return ""
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return _upgrade_logo_url(candidates[0][1])
+    if strong:
+        strong.sort(key=lambda x: x[0], reverse=True)
+        return _upgrade_logo_url(strong[0][1])
+    return _upgrade_logo_url(fallback_icons[0]) if fallback_icons else ""
 
 
 def _normalise_company_display(name):
@@ -576,18 +659,32 @@ def clean_title(title, company=""):
     return title[:220]
 
 
+
 def labeled_date_from_text(text, labels):
-    text = re.sub(r"\s+", " ", text or " ")
+    text = re.sub(r"\s+", " ", clean_text(text or " "))
+    # Longer labels first so "deadline for applications" wins over "deadline".
+    labels = sorted(labels, key=len, reverse=True)
     label_pattern = "|".join(re.escape(x) for x in labels)
+    month = (
+        r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+        r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|"
+        r"Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?"
+    )
+    day = r"\d{1,2}\s*(?:st|nd|rd|th)?"
     date_patterns = [
         r"\d{4}-\d{1,2}-\d{1,2}",
         r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}",
-        r"\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}",
-        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}",
+        rf"{day}\s+(?:{month})\s+\d{{4}}",
+        rf"(?:{month})\s+{day},?\s+\d{{4}}",
     ]
     dp = "(?:" + "|".join(date_patterns) + ")"
     m = re.search(rf"(?:{label_pattern})\s*[:\-]?\s*({dp})", text, re.I)
-    return parse_date(m.group(1)) if m else None
+    if not m:
+        return None
+    raw = re.sub(r"(?<=\d)\s*(?:st|nd|rd|th)\b", "", m.group(1), flags=re.I)
+    # dateutil understands Sep/Sept/September; normalize the odd abbreviation too.
+    raw = re.sub(r"\bSept\b", "Sep", raw, flags=re.I)
+    return parse_date(raw)
 
 
 def extract_posted_date(soup, text, structured_value=None):
@@ -617,13 +714,25 @@ def extract_posted_date(soup, text, structured_value=None):
     return labeled_date_from_text(text, ["posted", "posted on", "date posted", "published", "published on", "opening posted"])
 
 
+
 def extract_deadline(soup, text, structured_value=None):
     d = parse_date(structured_value)
     if d:
         return d
     return labeled_date_from_text(
         text,
-        ["application deadline", "apply by", "last date", "closing date", "applications close", "deadline"],
+        [
+            "deadline for applications",
+            "deadline for application",
+            "application deadline",
+            "applications closing",
+            "applications close",
+            "last date to apply",
+            "apply by",
+            "last date",
+            "closing date",
+            "deadline",
+        ],
     )
 
 
@@ -642,35 +751,44 @@ def page_has_open_signal(text, cfg):
     return any(signal.lower() in low for signal in cfg.get("open_signals", []))
 
 
+
 def find_apply_route(soup, page_url, page_text, cfg):
-    # 1. Explicit application links and mailto links.
-    candidates = []
+    """Find the best public application route without requiring authentication."""
+    web_candidates = []
+    mail_candidates = []
+
     for a in soup.find_all("a", href=True):
-        href = a.get("href", "").strip()
+        href = (a.get("href") or "").strip()
         label = clean_text(a.get_text(" ", strip=True)).lower()
         parent_text = clean_text(a.parent.get_text(" ", strip=True) if a.parent else "").lower()
         if href.lower().startswith("mailto:"):
             email = href.split(":", 1)[1].split("?", 1)[0].strip()
-            return href, "Email", email
+            if email:
+                mail_candidates.append(email)
+            continue
         if any(k in label for k in ("apply", "submit application", "send cv", "send resume")) or (
             "apply" in href.lower() and "apply" in parent_text
         ):
             full = canonical_url(urljoin(page_url, href))
             if full and not is_blocked_domain(full, cfg) and not login_gated_url(full, cfg):
-                candidates.append(full)
-    if candidates:
-        return candidates[0], "Apply Link", ""
+                web_candidates.append(full)
 
-    # 2. Public form on the page.
+    # A dedicated Apply link is the best UX when it is public.
+    if web_candidates:
+        return web_candidates[0], "Apply Link", ""
+
+    # A public form is preferable to a generic email address.
     if soup.find("form") and page_has_open_signal(page_text, cfg):
         return canonical_url(page_url), "Public Form", ""
 
-    # 3. Public email written in the page text.
-    email, _ = extract_public_contacts(page_text)
+    text_email, _ = extract_public_contacts(page_text)
+    if text_email:
+        mail_candidates.append(text_email)
+    email = _best_email(mail_candidates)
     if email and page_has_open_signal(page_text, cfg):
         return f"mailto:{email}", "Email", email
 
-    return "", "", email if 'email' in locals() else ""
+    return "", "", email
 
 
 def verify_apply_url(apply_url, source_url, page_text, cfg):
@@ -731,15 +849,39 @@ def validate_freshness(posted_date, deadline, page_text, apply_url, application_
     return False, "Unverified", "No acceptable posted date and insufficient live-opening evidence", ""
 
 
-def fingerprint(job):
-    base = "|".join(
-        [
-            clean_text(job.get("title")).lower(),
-            clean_text(job.get("company")).lower(),
-            clean_text(job.get("city")).lower(),
-            canonical_url(job.get("apply_url") or job.get("source_url")).lower(),
-        ]
+
+def _natural_company(value):
+    return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
+
+
+def _natural_title(value):
+    title = clean_text(value).lower()
+    # Remove parenthetical/trailing experience annotations so careers-list and
+    # detail-page versions of the same vacancy collapse to one job.
+    title = re.sub(
+        r"\([^)]*(?:\d+\s*(?:-|–|to)\s*\d+|\d+\+?|minimum\s+\d+)\s*(?:years?|yrs?)[^)]*\)",
+        " ", title, flags=re.I,
     )
+    title = re.sub(
+        r"\b(?:\d+\s*(?:-|–|to)\s*\d+|\d+\+?|minimum\s+\d+)\s*(?:years?|yrs?)\s*(?:of\s+experience)?\b",
+        " ", title, flags=re.I,
+    )
+    title = re.sub(r"\bof\s+experience\b", " ", title, flags=re.I)
+    title = re.sub(r"[^a-z0-9+]+", " ", title)
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def natural_job_key(job):
+    company = _natural_company(job.get("company") or job.get("Company"))
+    title = _natural_title(job.get("title") or job.get("Job Title"))
+    city = re.sub(r"[^a-z0-9]+", " ", clean_text(job.get("city") or job.get("City")).lower()).strip()
+    return "|".join((company, title, city))
+
+
+def fingerprint(job):
+    # V2.2 fingerprints represent the vacancy itself, not the page URL. This
+    # prevents a careers-list row and a detail-page row becoming duplicates.
+    base = natural_job_key(job)
     return hashlib.sha256(base.encode("utf-8")).hexdigest()[:24]
 
 
@@ -937,8 +1079,38 @@ def html_page_job(page_url, response_text, cfg, title_hint=""):
     return normalize_job(job, cfg)
 
 
-def _is_role_heading(tag, company, cfg):
+
+def _looks_like_job_heading(tag, company, cfg):
+    """Recognize any likely job-role heading, even if that role is not architecture.
+
+    We use this as a section boundary. Example: an Architectural Draftsman block
+    must stop before a Project Engineer heading even though Project Engineer is
+    not a target role for this architecture collector.
+    """
     if not isinstance(tag, Tag) or tag.name not in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return False
+    raw = clean_text(tag.get_text(" ", strip=True))
+    if not raw or len(raw) > 180:
+        return False
+    low = raw.lower().strip(" :-|")
+    generic = {
+        "application", "apply", "open positions", "open position", "current openings",
+        "current opening", "requirements", "responsibilities", "qualification",
+        "qualifications", "benefits", "about us", "careers", "career", "contact",
+        "get in touch", "documents", "explore our office culture",
+    }
+    if low in generic:
+        return False
+    role_terms = (
+        "architect", "designer", "draftsman", "draughtsman", "engineer", "coordinator",
+        "manager", "officer", "visualizer", "visualiser", "planner", "intern",
+        "surveyor", "modeler", "modeller", "artist", "lead", "head",
+    )
+    return any(re.search(rf"\b{re.escape(term)}\b", low) for term in role_terms)
+
+
+def _is_role_heading(tag, company, cfg):
+    if not _looks_like_job_heading(tag, company, cfg):
         return False
     candidate = clean_title(tag.get_text(" ", strip=True), company)
     return bool(candidate) and relevant_architecture_job(
@@ -946,15 +1118,11 @@ def _is_role_heading(tag, company, cfg):
     )
 
 
-def _job_section_text_from_heading(heading, company, cfg, max_chars=9000):
-    """Collect only this role's text until the next architecture-role heading.
 
-    This prevents a careers page containing several roles from copying the first
-    role's experience/description into every other row.
-    """
+def _job_section_text_from_heading(heading, company, cfg, max_chars=7000):
+    """Collect this vacancy only, stopping at the next likely job heading/form."""
     parts = []
     seen = set()
-
     title = clean_title(heading.get_text(" ", strip=True), company)
     if title:
         parts.append(title)
@@ -966,7 +1134,9 @@ def _job_section_text_from_heading(heading, company, cfg, max_chars=9000):
         if isinstance(node, Tag):
             if node.name in {"script", "style", "noscript", "svg"}:
                 continue
-            if node is not heading and _is_role_heading(node, company, cfg):
+            if node.name == "form":
+                break
+            if node is not heading and _looks_like_job_heading(node, company, cfg):
                 break
             continue
         if not isinstance(node, NavigableString):
@@ -977,6 +1147,10 @@ def _job_section_text_from_heading(heading, company, cfg, max_chars=9000):
         value = clean_text(str(node))
         if not value:
             continue
+        # Stop before a form/application UI even when it is not marked as a heading.
+        low = value.lower().strip(" :-|")
+        if low in {"application", "application form", "apply now", "documents"} and len(parts) > 1:
+            break
         key = value.lower()
         if key in seen:
             continue
@@ -1323,20 +1497,74 @@ def fetch_greenhouse(board, cfg):
     return out
 
 
+
+def _job_quality_score(job):
+    score = 0
+    source = (job.get("source_type") or "").lower()
+    if "ats" in source or "api" in source or "json" in source:
+        score += 12
+    elif source == "html":
+        score += 10
+    elif "inline" in source:
+        score += 3
+
+    src = canonical_url(job.get("source_url"))
+    path = urlparse(src).path.lower() if src else ""
+    if path and path.rstrip("/") not in {"/career", "/careers", "/jobs", "/openings"}:
+        score += 8
+    if job.get("experience"):
+        score += 3
+    if job.get("skills"):
+        score += 2
+    if job.get("deadline"):
+        score += 3
+    if job.get("posted_date"):
+        score += 3
+    if job.get("logo_url") and "logo" in job.get("logo_url", "").lower():
+        score += 3
+    if job.get("contact_email"):
+        score += max(0, 4 - _email_priority(job.get("contact_email")))
+    desc_len = len(job.get("description") or "")
+    score += min(desc_len // 350, 5)
+    return score
+
+
+def _merge_job_records(preferred, other):
+    out = dict(preferred)
+    for key in (
+        "experience", "salary", "skills", "posted_date", "deadline", "logo_url",
+        "contact_email", "contact_phone", "company_website", "apply_url",
+        "application_method", "location", "city", "state", "country",
+    ):
+        if not out.get(key) and other.get(key):
+            out[key] = other[key]
+    # Prefer the dedicated/richer description, never concatenate pages together.
+    if len(other.get("description") or "") > len(out.get("description") or "") and _job_quality_score(other) > _job_quality_score(preferred):
+        out["description"] = other["description"]
+    out["fingerprint"] = fingerprint(out)
+    return out
+
+
 def dedupe(jobs):
-    best = {}
+    groups = {}
     for job in jobs:
-        fp = job.get("fingerprint") or fingerprint(job)
-        job["fingerprint"] = fp
-        score = sum(
-            bool(job.get(k))
-            for k in (
-                "description", "posted_date", "deadline", "experience", "salary", "skills", "logo_url", "contact_email"
-            )
-        )
-        if fp not in best or score > best[fp][0]:
-            best[fp] = (score, job)
-    return [v[1] for v in best.values()]
+        key = natural_job_key(job)
+        if not key.strip("|"):
+            continue
+        if key not in groups:
+            groups[key] = job
+            continue
+        current = groups[key]
+        if _job_quality_score(job) > _job_quality_score(current):
+            groups[key] = _merge_job_records(job, current)
+        else:
+            groups[key] = _merge_job_records(current, job)
+
+    result = []
+    for job in groups.values():
+        job["fingerprint"] = fingerprint(job)
+        result.append(job)
+    return result
 
 
 def scan_all_sources(cfg):
@@ -1632,6 +1860,7 @@ def parse_existing_date(value):
     return parse_date(value)
 
 
+
 def revalidate_existing_record(record, cfg):
     cutoff = minimum_date(cfg)
     posted = parse_existing_date(record.get("Posted Date"))
@@ -1646,28 +1875,44 @@ def revalidate_existing_record(record, cfg):
     if not url:
         return False, "No application/source URL"
     if url.lower().startswith("mailto:"):
-        return True, ""
+        # For email-only rows, re-check the source page so an old deadline on
+        # that page can still close the vacancy.
+        url = record.get("Source URL") or ""
+        if not url:
+            return True, ""
     if is_blocked_domain(url, cfg) or login_gated_url(url, cfg):
         return False, "Blocked or login-gated application URL"
 
     r = fetch(url, cfg)
     if not r:
         return False, "Application page is no longer publicly reachable"
-    text = best_main_text(BeautifulSoup(r.text, "html.parser"))
-    reason = page_closed_reason(text, deadline, cfg)
+    soup = BeautifulSoup(r.text, "html.parser")
+    text = best_main_text(soup)
+
+    live_deadline = extract_deadline(soup, text)
+    if live_deadline and live_deadline < now_ist().date():
+        return False, f"Application deadline passed: {live_deadline.isoformat()}"
+    live_posted = extract_posted_date(soup, text)
+    if live_posted and live_posted < cutoff:
+        return False, f"Posted before cutoff {cutoff.isoformat()}"
+
+    reason = page_closed_reason(text, live_deadline or deadline, cfg)
     if reason:
         return False, reason
 
     title = (record.get("Job Title") or "").strip()
-    # Generic career pages should still contain a recognizable role title.
-    if title and url == (record.get("Source URL") or "") and len(title) < 180:
-        title_core = re.sub(r"[^a-z0-9 ]+", " ", title.lower())
-        title_core = re.sub(r"\s+", " ", title_core).strip()
+    source_url = canonical_url(record.get("Source URL") or "")
+    if title and canonical_url(url) == source_url and len(title) < 180:
+        title_core = _natural_title(title)
         page_low = re.sub(r"\s+", " ", text.lower())
-        significant = [w for w in title_core.split() if len(w) >= 4 and w not in ("career", "careers", "designs", "architecture")]
+        significant = [
+            w for w in title_core.split()
+            if len(w) >= 4 and w not in ("career", "careers", "designs", "architecture")
+        ]
         if significant and not all(w in page_low for w in significant[:3]):
             return False, "Role title is no longer visible on the source page"
     return True, ""
+
 
 
 def write_sheet(jobs, cfg):
@@ -1681,28 +1926,85 @@ def write_sheet(jobs, cfg):
     values = read_sheet_values(svc, sheet_id, tab)
     rows = values[1:] if len(values) > 1 else []
 
+    existing_entries = []
     existing_by_fp = {}
+    existing_by_key = {}
     for idx, row in enumerate(rows, start=2):
         rec = row_to_record(headers, row)
-        fp = rec.get("Fingerprint")
+        fp = rec.get("Fingerprint") or ""
+        key = natural_job_key(rec)
+        entry = (idx, row, rec)
+        existing_entries.append(entry)
         if fp:
-            existing_by_fp[fp] = (idx, row, rec)
+            existing_by_fp[fp] = entry
+        if key.strip("|"):
+            existing_by_key.setdefault(key, []).append(entry)
 
     current_fps = {j["fingerprint"] for j in jobs}
+    current_keys = {natural_job_key(j) for j in jobs}
     new_rows = []
-    updates = []
+    updates_by_row = {}
     new_count = 0
     updated_count = 0
     closed_count = 0
+    touched_rows = set()
 
-    # Revalidate existing active rows that were not rediscovered this run.
+    def queue_update(row_num, values):
+        updates_by_row[row_num] = {
+            "range": f"'{tab}'!A{row_num}:{column_letter(len(headers))}{row_num}",
+            "values": [values],
+        }
+
+    # Upsert current V2.2 jobs. Match old V2/V2.1 rows by natural vacancy key
+    # when their legacy fingerprint was URL-based.
+    for job in jobs:
+        fp = job["fingerprint"]
+        key = natural_job_key(job)
+        match = existing_by_fp.get(fp)
+        if not match:
+            candidates = existing_by_key.get(key, [])
+            active = [e for e in candidates if (e[2].get("Status") or "").lower() == "active"]
+            match = active[0] if active else (candidates[0] if candidates else None)
+
+        if match:
+            row_num, old_row, rec = match
+            record = job_to_record(job, first_seen=rec.get("First Seen") or now_iso())
+            merged = record_to_row(headers, record, old_row)
+            queue_update(row_num, merged)
+            touched_rows.add(row_num)
+            updated_count += 1
+
+            # Close legacy duplicate rows for the same vacancy.
+            for dup in existing_by_key.get(key, []):
+                dup_row_num, dup_old_row, dup_rec = dup
+                if dup_row_num == row_num or (dup_rec.get("Status") or "").lower() != "active":
+                    continue
+                patch = {
+                    "Verified At": now_iso(),
+                    "Application Status": "Closed",
+                    "Status": "Closed",
+                    "Closed Reason": "Duplicate merged by V2.2",
+                }
+                queue_update(dup_row_num, record_to_row(headers, patch, dup_old_row))
+                touched_rows.add(dup_row_num)
+                closed_count += 1
+        else:
+            record = job_to_record(job)
+            new_rows.append(record_to_row(headers, record))
+            new_count += 1
+
+    # Revalidate remaining active rows that were not rediscovered. This will
+    # close legacy rows such as a 2023 vacancy whose deadline was previously missed.
     if cfg.get("revalidate_existing_jobs", True):
         limit = int(cfg.get("revalidate_limit_per_run", 250))
         checked = 0
-        for fp, (row_num, old_row, rec) in existing_by_fp.items():
+        for row_num, old_row, rec in existing_entries:
             if checked >= limit:
                 break
-            if fp in current_fps or (rec.get("Status") or "").lower() != "active":
+            if row_num in touched_rows or (rec.get("Status") or "").lower() != "active":
+                continue
+            key = natural_job_key(rec)
+            if key in current_keys:
                 continue
             checked += 1
             is_open, reason = revalidate_existing_record(rec, cfg)
@@ -1719,28 +2021,7 @@ def write_sheet(jobs, cfg):
                 closed_count += 1
             else:
                 patch.update({"Application Status": "Open", "Closed Reason": ""})
-            merged = record_to_row(headers, patch, old_row)
-            updates.append({
-                "range": f"'{tab}'!A{row_num}:{column_letter(len(headers))}{row_num}",
-                "values": [merged],
-            })
-
-    # Upsert currently discovered jobs.
-    for job in jobs:
-        fp = job["fingerprint"]
-        if fp in existing_by_fp:
-            row_num, old_row, rec = existing_by_fp[fp]
-            record = job_to_record(job, first_seen=rec.get("First Seen") or now_iso())
-            merged = record_to_row(headers, record, old_row)
-            updates.append({
-                "range": f"'{tab}'!A{row_num}:{column_letter(len(headers))}{row_num}",
-                "values": [merged],
-            })
-            updated_count += 1
-        else:
-            record = job_to_record(job)
-            new_rows.append(record_to_row(headers, record))
-            new_count += 1
+            queue_update(row_num, record_to_row(headers, patch, old_row))
 
     if new_rows:
         svc.spreadsheets().values().append(
@@ -1751,6 +2032,7 @@ def write_sheet(jobs, cfg):
             body={"values": new_rows},
         ).execute()
 
+    updates = list(updates_by_row.values())
     if updates:
         svc.spreadsheets().values().batchUpdate(
             spreadsheetId=sheet_id,
@@ -1765,6 +2047,7 @@ def load_config():
         cfg = yaml.safe_load(f)
     minimum_date(cfg)
     return cfg
+
 
 
 def self_test():
@@ -1805,7 +2088,40 @@ def self_test():
     closed = dict(base, posted_date=date(2026, 9, 5), deadline=None, page_text="This job has expired. Apply now.")
     assert normalize_job(closed, cfg) is None, "Closed signal must override freshness"
 
-    print("SELF TEST PASSED: cutoff, fresh, undated-live and closed-job rules are working.")
+    # V2.2 regression: old application deadlines such as Shree Designs' 2023
+    # deadline must be detected even with ordinal suffix + 'Sept'.
+    d = labeled_date_from_text(
+        "Deadline for Applications: 30th Sept 2023 How to apply: email us",
+        ["deadline for applications", "application deadline", "deadline"],
+    )
+    assert d == date(2023, 9, 30), f"Expected 2023-09-30 deadline, got {d}"
+    stale_deadline = dict(
+        base,
+        posted_date=None,
+        deadline=d,
+        page_text="We are hiring. Apply now. Deadline for Applications: 30th Sept 2023",
+    )
+    assert normalize_job(stale_deadline, cfg) is None, "Expired deadline must reject undated job"
+
+    # V2.2 regression: careers list + detail page must dedupe to one vacancy.
+    a = dict(base, title="Junior Architect (0-2 Years of Experience)", source_type="HTML Inline", source_url="https://example.com/careers")
+    b = dict(base, title="Junior Architect", source_type="HTML", source_url="https://example.com/careers-junior-architect")
+    a["fingerprint"] = fingerprint(a)
+    b["fingerprint"] = fingerprint(b)
+    assert a["fingerprint"] == b["fingerprint"], "Natural vacancy fingerprint should ignore experience annotation/URL"
+    assert len(dedupe([a, b])) == 1, "Duplicate list/detail vacancy should collapse to one row"
+
+    # Employment type must not be polluted by phrases like previous internship.
+    assert extract_job_type("CV detailing internship / previous experience. Job type: Full time") == "Full Time"
+
+    # Careers/HR email should beat generic info/press addresses.
+    email, _ = extract_public_contacts("info@example.com press@example.com hr@example.com careers@example.com")
+    assert email == "careers@example.com", f"Expected careers email, got {email}"
+
+    # Mojibake repair.
+    assert "you’re" in clean_text("If youâ€™re interested").lower()
+
+    print("SELF TEST PASSED: V2.2 freshness, deadline, dedupe, contact, encoding and job-type rules are working.")
 
 
 def main():
@@ -1820,7 +2136,7 @@ def main():
     cfg = load_config()
     jobs, reports = scan_all_sources(cfg)
     print("=" * 80)
-    print(f"V2 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V2.2 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
