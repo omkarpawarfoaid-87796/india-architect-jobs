@@ -1,4 +1,4 @@
-name: Fresh Architect Job Discovery V4.3.1
+name: Fresh Architect Job Discovery V4.4
 
 on:
   workflow_dispatch:
@@ -39,6 +39,16 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SOURCES_TAB: Sources
         run: python fresh_jobs.py
+
+      - name: Validate ATS discovery
+        run: python ats_discovery.py --self-test
+
+      - name: Discover ATS boards from newly found employers
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SOURCES_TAB: Sources
+        run: python ats_discovery.py
 
       - name: Refresh website jobs immediately
         env:
