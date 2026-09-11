@@ -1,4 +1,4 @@
-# Architect Jobs Collector V4.4 — ATS Coverage + Refined Employer Classification
+# Architect Jobs Collector V4.4.2 — ATS Coverage + Showable Output Report
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -340,3 +340,51 @@ max_ats_job_links_per_source: 60
 
 # SmartRecruiters list results are filtered before detail requests.
 smartrecruiters_detail_limit: 40
+
+
+# -------------------------------------------------------------------
+# V4.4.2 stronger platform/CDN blocking
+# -------------------------------------------------------------------
+platform_blocked_domains:
+  - web.archive.org
+  - archive.org
+  - yellowpages.com
+  - superpages.com
+  - houzz.com
+  - interiordesign.net
+  - decorilla.com
+  - people.inc
+  - condenast.com
+  - archdaily.com
+  - architizer.com
+  - dezeen.com
+  - designboom.com
+  - linkedin.com
+  - indeed.com
+  - naukri.com
+  - glassdoor.com
+  - glassdoor.co.in
+  - foundit.in
+  - shine.com
+  - timesjobs.com
+
+ats_search_queries_per_source: 6
+ats_search_results_per_source: 8
+ats_search_patterns:
+  - jobs.lever.co
+  - greenhouse.io
+  - ashbyhq.com
+  - smartrecruiters.com
+  - myworkdayjobs.com
+  - apply.workable.com
+  - freshteam.com
+  - zohorecruit.com
+  - breezy.hr
+  - teamtailor.com
+  - jobvite.com
+  - icims.com
+  - recruitee.com
+  - bamboohr.com
+  - applytojob.com
+
+report_tab: AutomationOutput
