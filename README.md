@@ -1,133 +1,75 @@
-# India Architect Job Collector
+# Architect Job Collector V2
 
-Free-first hourly collector for **public Indian architecture jobs**.
+V2 is designed for the India architecture/design job website workflow.
 
-## What it does
+## Hard freshness rule
 
-- Runs automatically every hour using GitHub Actions.
-- Uses public employer career pages and public ATS job feeds.
-- Extracts structured `JobPosting` data from Schema.org JSON-LD.
-- Supports public Lever and Greenhouse job boards.
-- Keeps only architecture / interior / urban / landscape / BIM-type roles.
-- Excludes software/cloud/solution/data/etc. "architect" roles.
-- Keeps only jobs whose location appears to be in India.
-- Rejects LinkedIn.
-- Rejects final application pages that appear login-gated.
-- Deduplicates jobs.
-- Refreshes existing rows and adds new rows to Google Sheets.
-- Extracts only publicly displayed contact email/phone where available.
+- Dated vacancies posted **before 2026-09-01 are rejected**.
+- September 2026, October 2026 and later jobs can be accepted only while applications are open.
+- A closed/expired signal always overrides a recent date.
+- Undated vacancies are accepted only when the page clearly shows a live opening AND a public application method.
+- LinkedIn and configured login-gated URLs are rejected.
 
-## Sheet columns
+## What V2 adds over V1
 
-Job ID, Job Title, Company, Location, City, State, Country, Job Type,
-Experience, Salary, Skills, Short Description, Full Description, Posted Date,
-Valid Through, Source Type, Source Name, Source URL, Apply URL, Company Website,
-Logo URL, Public Contact Email, Public Contact Phone, First Seen, Last Seen,
-Status, Fingerprint.
+1. September 1, 2026 freshness cutoff.
+2. Application deadline detection.
+3. Closed/expired vacancy detection.
+4. HTML extraction in addition to Schema.org JobPosting JSON-LD.
+5. Job-detail link discovery from career pages.
+6. Relevant job URL discovery from public sitemaps.
+7. Public apply-route detection: apply link, public form or public email.
+8. Better India city/state normalization.
+9. Architecture role filtering and IT/software-architect rejection.
+10. Existing-job revalidation; stale/closed rows are kept historically but marked Closed.
+11. Existing V1 Google Sheet is migrated automatically by appending the new V2 columns.
+12. Built-in self-test before every GitHub Actions run.
 
-## Setup
+## New V2 columns
 
-### 1. Create the Google Sheet
+V2 preserves your old columns and adds fields such as:
 
-Create a blank Google Sheet. Rename the first tab to `Jobs`.
-Copy the spreadsheet ID from its URL.
+- Job Category
+- Application Deadline
+- Freshness
+- Application Status
+- Application Method
+- Verified At
+- Closed Reason
 
-### 2. Create a Google Cloud service account
+## Upgrade from V1
 
-1. Create a Google Cloud project.
-2. Enable **Google Sheets API**.
-3. Create a service account and download its JSON key.
-4. Copy the service-account email address.
-5. Share your Google Sheet with that email as **Editor**.
+Your existing GitHub secrets do not change:
 
-For minimum exposure, give this service account access only to the job sheet.
+- `GOOGLE_SHEET_ID`
+- `GOOGLE_SERVICE_ACCOUNT_JSON`
 
-### 3. Create the GitHub repository
+Keep the Google Sheet tab named `Jobs`.
 
-Upload these files to a repository.
+Replace these repository files with the V2 copies:
 
-A public repository gets standard GitHub-hosted Actions without billable
-minutes. If you prefer a private GitHub Free repository, keep an eye on the
-monthly included Actions-minute quota.
+- `collector.py`
+- `config.yaml`
+- `requirements.txt`
+- `.github/workflows/hourly.yml`
 
-### 4. Add GitHub Actions secrets
+Then go to GitHub -> Actions -> **Hourly Architect Job Collector V2** -> **Run workflow**.
 
-Repository -> Settings -> Secrets and variables -> Actions -> New repository secret.
+The first V2 run will also review old active records. For example, the 2020 Shree Designs result from V1 should be marked `Closed` because its posted date is older than the 2026-09-01 cutoff.
 
-Add:
+## Expected GitHub log
 
-- `GOOGLE_SHEET_ID` = the spreadsheet ID.
-- `GOOGLE_SERVICE_ACCOUNT_JSON` = the complete contents of the service-account JSON key.
+A normal run will show messages like:
 
-Never commit the JSON key into the repository.
-
-### 5. Add job sources
-
-Edit `config.yaml`.
-
-Add employer careers pages:
-
-```yaml
-career_pages:
-  - https://company.example/careers
-  - https://another.example/jobs
+```
+SELF TEST PASSED: cutoff, fresh, undated-live and closed-job rules are working.
+SOURCE OK | https://example.com/careers | jobs=2
+...
+V2 cutoff date: 2026-09-01
+Qualified OPEN Indian architecture jobs this run: 8
+Google Sheet: 5 new, 3 refreshed, 1 closed/stale
 ```
 
-If an employer uses Lever:
+## Important
 
-```yaml
-lever_sites:
-  - employer-board-name
-```
-
-If it uses Greenhouse:
-
-```yaml
-greenhouse_boards:
-  - employer-board-token
-```
-
-The strongest scalable approach is to keep expanding this source registry as
-the discovery process finds new architecture employers.
-
-### 6. Test manually
-
-GitHub -> Actions -> Hourly Architect Job Collector -> Run workflow.
-
-Or locally:
-
-```bash
-pip install -r requirements.txt
-DRY_RUN=true python collector.py
-```
-
-### 7. Hourly schedule
-
-The workflow runs at minute 17 of every hour in `Asia/Kolkata`.
-
-Why minute 17 instead of exactly `00`? Scheduled jobs are often busier at the
-top of the hour. Running at an off-minute tends to be more reliable.
-
-## Important source policy
-
-Use only pages that are publicly accessible. Do not bypass authentication,
-CAPTCHA, paywalls, access controls, or anti-bot restrictions.
-
-The system intentionally excludes LinkedIn. If another source requires users
-to create an account or sign in before applying, add it to `blocked_domains`
-or its login path to `login_url_markers`.
-
-## Scaling plan
-
-V1: employer sites + Lever + Greenhouse + JSON-LD.
-
-V2: add adapters for other public ATS systems (e.g. SmartRecruiters, Workable,
-Ashby and employer-specific APIs where their public job endpoints permit it).
-
-V3: add a separate discovery job that identifies new Indian architecture firms
-and their public careers pages, verifies the domain, and adds approved sources
-to the source registry.
-
-Do not use a generic "scrape the whole web" loop as the only source. It is less
-stable, harder to deduplicate and more likely to hit anti-bot/login walls.
-# india-architect-jobs
+The collector uses only publicly accessible pages. It does not bypass authentication, CAPTCHA, paywalls or access controls.

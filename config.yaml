@@ -1,33 +1,35 @@
-# India-only architecture / built-environment job collector.
-#
-# Add public career pages here. The collector:
-# 1. reads the page and common sitemap URLs,
-# 2. looks for Schema.org JobPosting JSON-LD,
-# 3. saves only relevant Indian architecture jobs,
-# 4. rejects LinkedIn and other blocked/login-gated final apply links.
-#
-# A few empty ATS sections are included so you can add employer board IDs
-# as you discover them.
+# Architect Jobs Collector V2
+# India-only architecture/design jobs.
+# Freshness rule requested by user:
+# - Never accept a dated job posted before 2026-09-01.
+# - Undated jobs are accepted only when the vacancy is clearly live and publicly applyable.
+# - Closed/expired jobs are rejected even if they are newer than the cutoff.
+
+minimum_posted_date: "2026-09-01"
+accept_undated_if_live_verified: true
+verify_apply_urls: true
+revalidate_existing_jobs: true
 
 keywords:
   include:
     - architect
     - architecture
     - architectural
-    - interior designer
+    - junior architect
+    - senior architect
+    - project architect
+    - design architect
     - interior architect
+    - interior designer
+    - landscape architect
     - urban designer
     - urban planner
-    - landscape architect
     - bim architect
     - bim coordinator
     - revit architect
-    - design architect
-    - project architect
-    - junior architect
-    - senior architect
-    - visualization architect
+    - architectural designer
     - 3d visualizer
+    - visualizer
   exclude:
     - software architect
     - solutions architect
@@ -40,6 +42,63 @@ keywords:
     - technical architect
     - systems architect
     - application architect
+    - platform architect
+    - infrastructure architect
+    - aws architect
+    - azure architect
+
+skill_terms:
+  - AutoCAD
+  - Revit
+  - SketchUp
+  - Rhino
+  - Grasshopper
+  - BIM
+  - Lumion
+  - Enscape
+  - V-Ray
+  - 3ds Max
+  - Photoshop
+  - Illustrator
+  - InDesign
+  - ArchiCAD
+
+closed_signals:
+  - applications closed
+  - application closed
+  - no longer accepting applications
+  - no longer available
+  - position has been filled
+  - position filled
+  - position closed
+  - vacancy closed
+  - job closed
+  - this job has expired
+  - job has expired
+  - job expired
+  - posting has expired
+  - opportunity has closed
+  - recruitment closed
+
+open_signals:
+  - apply now
+  - apply for this job
+  - submit application
+  - submit your application
+  - current opening
+  - current openings
+  - open position
+  - open positions
+  - we are hiring
+  - we're hiring
+  - join our team
+  - send your cv
+  - send cv
+  - send your resume
+  - send resume
+  - careers@
+  - jobs@
+  - hr@
 
 india_markers:
   - india
@@ -76,23 +135,32 @@ india_markers:
   - mysuru
   - mysore
   - bhubaneswar
+  - thane
+  - navi mumbai
+  - rajkot
+  - mangaluru
+  - mangalore
+  - dehradun
+  - guwahati
+  - raipur
+  - ranchi
 
 blocked_domains:
   - linkedin.com
   - www.linkedin.com
 
-# If the final page clearly redirects to one of these account/login systems,
-# the record is not published. Add domains here when you find more unwanted sources.
 login_url_markers:
   - /login
   - /signin
   - /sign-in
   - /account/login
+  - /auth/login
 
-# Public ATS board IDs/tokens. Add one per employer as discovered.
+# Public ATS board IDs/tokens can be added here as they are discovered.
 lever_sites: []
 greenhouse_boards: []
 
+# Seed sources. V2 can extract JSON-LD and ordinary HTML job pages from them.
 career_pages:
   - "https://www.abhikalpan.in/career.html"
   - "https://www.uha.global/careers"
@@ -109,6 +177,9 @@ career_pages:
   - "https://www.studiolotus.in/careers"
   - "https://www.abindesignstudio.com/career"
 
-max_pages_per_source: 40
+max_sitemap_pages_per_source: 20
+max_job_links_per_source: 30
 request_timeout_seconds: 15
-request_delay_seconds: 0.35
+request_delay_seconds: 0.15
+source_workers: 6
+revalidate_limit_per_run: 250

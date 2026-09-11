@@ -1,4 +1,4 @@
-name: Hourly Architect Job Collector
+name: Hourly Architect Job Collector V2
 
 on:
   workflow_dispatch:
@@ -7,13 +7,13 @@ on:
       timezone: "Asia/Kolkata"
 
 concurrency:
-  group: architect-job-collector
+  group: architect-job-collector-v2
   cancel-in-progress: false
 
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -28,9 +28,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run collector
+      - name: Validate V2 rules
+        run: python collector.py --self-test
+
+      - name: Run V2 collector
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          GOOGLE_SHEET_TAB: Sheet1
+          GOOGLE_SHEET_TAB: Jobs
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: python collector.py
