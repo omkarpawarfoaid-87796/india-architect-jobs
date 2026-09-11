@@ -1,5 +1,5 @@
 """
-V4.2 Fresh Job Discovery
+V4.2.1 Fresh Job Discovery
 
 Purpose:
 - Find newly surfaced architecture / built-environment job signals every few hours.
@@ -13,6 +13,7 @@ Purpose:
 """
 
 import argparse
+import os
 import re
 import time
 from datetime import datetime
