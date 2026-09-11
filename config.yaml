@@ -1,4 +1,4 @@
-# Architect Jobs Collector V4.0 — Auto Discovery + Website Import Schema
+# Architect Jobs Collector V4.2 — Fresh Job + Source Discovery + Website Import Schema
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -259,3 +259,51 @@ logo_500_proxy_enabled: true
 logo_proxy_base_url: "https://wsrv.nl/"
 logo_size_px: 500
 logo_transparent_background: "00FFFFFF"
+
+
+# -------------------------------------------------------------------
+# V4.2 Fresh Job Discovery
+# -------------------------------------------------------------------
+# These searches are signals only. A job is never published from LinkedIn or a
+# job board alone; the automation must resolve a public official company source.
+fresh_job_roles:
+  - Junior Architect
+  - Architect
+  - Senior Architect
+  - Project Architect
+  - Site Architect
+  - Interior Architect
+  - Interior Designer
+  - BIM Architect
+  - BIM Modeler
+  - Architectural Draftsman
+  - 3D Visualizer
+  - 3D Render Artist
+  - Landscape Architect
+  - Urban Designer
+  - Urban Planner
+  - Site Supervisor
+  - Project Coordinator
+
+fresh_job_cities:
+  - Mumbai
+  - Pune
+  - New Delhi
+  - Gurugram
+  - Noida
+  - Bengaluru
+  - Hyderabad
+  - Chennai
+  - Ahmedabad
+  - Kolkata
+  - Chandigarh
+  - Jaipur
+  - Kochi
+  - Goa
+  - Surat
+
+fresh_roles_per_run: 5
+fresh_cities_per_run: 3
+fresh_max_queries_per_run: 24
+fresh_max_new_sources_per_run: 20
+fresh_request_delay_seconds: 0.8
