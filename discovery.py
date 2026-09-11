@@ -222,10 +222,7 @@ def load_config():
 def fetch(url, cfg):
     if not url:
         return None
-    d = host(url)
-    if any(d == x or d.endswith("." + x) for x in DISCOVERY_BLOCKED_DOMAINS):
-        return None
-    if core.is_blocked_domain(url, cfg):
+    if hard_block_reason(url) or core.is_blocked_domain(url, cfg):
         return None
     try:
         r = requests.get(
@@ -233,7 +230,7 @@ def fetch(url, cfg):
             timeout=int(cfg.get("request_timeout_seconds", 15)),
             headers={
                 "User-Agent": (
-                    "ArchitectJobsDiscovery/4.4.1 "
+                    "ArchitectJobsDiscovery/4.4.2.2 "
                     "(public-source discovery; no authentication bypass)"
                 ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -323,9 +320,24 @@ def hard_block_reason(url):
     d = host(url)
     if not d:
         return "Missing domain"
+
+    try:
+        cfg = load_config()
+        reason = core.blocked_domain_reason(url, cfg)
+        if reason:
+            return reason
+    except Exception:
+        pass
+
+    aliases = core.hostname_aliases(d)
     for blocked_domain in DISCOVERY_BLOCKED_DOMAINS:
-        if d == blocked_domain or d.endswith("." + blocked_domain):
-            return f"Blocked platform/domain: {blocked_domain}"
+        bd = blocked_domain.lower().removeprefix("www.")
+        for candidate in aliases:
+            stripped = candidate.removeprefix("www.")
+            if stripped == bd or stripped.endswith("." + bd):
+                return f"Blocked platform/domain: {blocked_domain}"
+            if any(stripped.endswith("." + suffix) or stripped == suffix for suffix in core.CDN_MIRROR_SUFFIXES) and bd in stripped:
+                return f"Blocked CDN/mirror alias of: {blocked_domain}"
     return ""
 
 
@@ -955,6 +967,7 @@ def self_test():
 
     assert hard_block_reason("https://www.archdaily.com/opportunities")
     assert hard_block_reason("https://architizer.com/jobs")
+    assert hard_block_reason("https://www-archdaily-com.global.ssl.fastly.net/opportunities")
 
     trusted_cfg = {
         "trusted_design_employer_domains": ["livspace.com"],
