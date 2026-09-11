@@ -1,13 +1,12 @@
-name: Hourly Architect Job Collector V2
+name: Hourly Architect Job Collector V3
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "17 * * * *"
-      timezone: "Asia/Kolkata"
 
 concurrency:
-  group: architect-job-collector-v2
+  group: architect-job-collector-v3
   cancel-in-progress: false
 
 jobs:
@@ -28,12 +27,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Validate V2 rules
+      - name: Validate V3 rules and schema
         run: python collector.py --self-test
 
-      - name: Run V2 collector
+      - name: Run V3 collector
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          GOOGLE_SHEET_TAB: Sheet1
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+          # This keeps using your current Google Sheet tab.
+          # V3 clears its old V2 rows/headers and rewrites only website-ready jobs.
+          GOOGLE_SHEET_TAB: Sheet1
+
+          # Internal automation history is kept separately.
+          GOOGLE_META_TAB: _CollectorMeta
         run: python collector.py
