@@ -126,7 +126,7 @@ def fetch(url, cfg):
             timeout=int(cfg.get("request_timeout_seconds", 15)),
             headers={
                 "User-Agent": (
-                    "ArchitectJobsDiscovery/4.1 "
+                    "ArchitectJobsDiscovery/4.2 "
                     "(public-source discovery; no authentication bypass)"
                 ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
