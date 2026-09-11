@@ -8,7 +8,7 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone, timedelta
-from urllib.parse import urljoin, urlparse, urldefrag, quote
+from urllib.parse import urljoin, urlparse, urldefrag, quote, unquote
 from zoneinfo import ZoneInfo
 import xml.etree.ElementTree as ET
 
@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/4.4 "
+    "ArchitectJobsCollector/4.4.2 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -343,9 +343,58 @@ def company_name_from_domain(url):
     return " ".join(words)
 
 
-def is_blocked_domain(url, cfg):
+CDN_MIRROR_SUFFIXES = (
+    "global.ssl.fastly.net",
+    "fastly.net",
+    "cloudfront.net",
+    "akamaized.net",
+    "azureedge.net",
+    "netlify.app",
+    "workers.dev",
+    "pages.dev",
+    "vercel.app",
+)
+
+
+def hostname_aliases(host):
+    """Generate hostname variants to catch CDN/proxy aliases of blocked sites."""
+    host = (host or "").lower().strip(".")
+    if not host:
+        return set()
+    aliases = {host}
+    aliases.add(host.replace("-", "."))
+    aliases.add(host.replace("_", "."))
+    aliases.add(host.replace("-", ".").replace("_", "."))
+    return {a.strip(".") for a in aliases if a}
+
+
+def blocked_domain_reason(url, cfg):
+    """Return a readable block reason, including CDN/mirror aliases."""
     d = domain(url)
-    return any(d == x or d.endswith("." + x) for x in cfg.get("blocked_domains", []))
+    if not d:
+        return ""
+
+    blocked = set(clean_text(x).lower().removeprefix("www.") for x in cfg.get("blocked_domains", []))
+    blocked |= set(clean_text(x).lower().removeprefix("www.") for x in cfg.get("platform_blocked_domains", []))
+    blocked = {x for x in blocked if x}
+
+    aliases = hostname_aliases(d)
+    for candidate in aliases:
+        stripped = candidate.removeprefix("www.")
+        for blocked_domain in blocked:
+            bd = blocked_domain.removeprefix("www.")
+            if stripped == bd or stripped.endswith("." + bd):
+                return f"Blocked platform/domain: {blocked_domain}"
+
+            if any(stripped.endswith("." + suffix) or stripped == suffix for suffix in CDN_MIRROR_SUFFIXES):
+                if bd in stripped:
+                    return f"Blocked CDN/mirror alias of: {blocked_domain}"
+
+    return ""
+
+
+def is_blocked_domain(url, cfg):
+    return bool(blocked_domain_reason(url, cfg))
 
 
 def login_gated_url(url, cfg):
@@ -1663,32 +1712,19 @@ def parse_page_for_jobs(page_url, cfg, title_hint=""):
 
 
 ATS_HOST_PATTERNS = {
-    "Lever": (
-        "jobs.lever.co",
-        "jobs.eu.lever.co",
-    ),
-    "Greenhouse": (
-        "boards.greenhouse.io",
-        "job-boards.greenhouse.io",
-        "boards.eu.greenhouse.io",
-    ),
-    "Ashby": (
-        "jobs.ashbyhq.com",
-    ),
-    "SmartRecruiters": (
-        "careers.smartrecruiters.com",
-        "jobs.smartrecruiters.com",
-    ),
-    "Workday": (
-        "myworkdayjobs.com",
-    ),
-    "Workable": (
-        "apply.workable.com",
-    ),
-    "Zoho Recruit": (
-        "jobs.zohorecruit.com",
-        "careers.zohorecruit.com",
-    ),
+    "Lever": ("jobs.lever.co", "jobs.eu.lever.co"),
+    "Greenhouse": ("boards.greenhouse.io", "job-boards.greenhouse.io", "boards.eu.greenhouse.io"),
+    "Ashby": ("jobs.ashbyhq.com",),
+    "SmartRecruiters": ("careers.smartrecruiters.com", "jobs.smartrecruiters.com"),
+    "Workday": ("myworkdayjobs.com",),
+    "Workable": ("apply.workable.com",),
+    "Zoho Recruit": ("jobs.zohorecruit.com", "careers.zohorecruit.com"),
+    "Breezy": ("breezy.hr", "jobs.breezy.hr"),
+    "Teamtailor": ("teamtailor.com", "careers.teamtailor.com"),
+    "Jobvite": ("jobs.jobvite.com", "jobvite.com"),
+    "iCIMS": ("icims.com", "careers.icims.com"),
+    "Recruitee": ("recruitee.com", "jobs.recruitee.com"),
+    "BambooHR": ("bamboohr.com", "applytojob.com"),
 }
 
 
@@ -1716,25 +1752,26 @@ def ats_identifier_from_url(url, provider=None):
     if provider in ("Lever", "Greenhouse", "Ashby", "SmartRecruiters", "Workable"):
         return parts[0] if parts else ""
 
+    if provider in ("Breezy", "Teamtailor", "Recruitee", "BambooHR"):
+        if parts:
+            return parts[0]
+        root = d.split(".")[0]
+        return root if root not in ("www", "jobs", "careers", "apply") else ""
+
+    if provider in ("Jobvite", "iCIMS", "Zoho Recruit"):
+        return parts[0] if parts else d
+
     if provider == "Freshteam":
         return d.split(".freshteam.com", 1)[0]
 
     if provider == "Workday":
-        # Workday tenants are generally represented by the subdomain.
         return d.split(".myworkdayjobs.com", 1)[0]
-
-    if provider == "Zoho Recruit":
-        # Zoho URLs vary heavily; retain the first useful path identifier.
-        return parts[0] if parts else d
 
     return ""
 
 
 def ats_board_root(url):
-    """
-    Normalize known ATS job/detail URLs to a reusable public board root.
-    Generic ATS systems retain the supplied public URL.
-    """
+    """Normalize known ATS job/detail URLs to a reusable public board root."""
     provider = ats_provider_from_url(url)
     ident = ats_identifier_from_url(url, provider)
     p = urlparse(url)
@@ -1761,32 +1798,63 @@ def ats_board_root(url):
     if provider == "Freshteam":
         return f"https://{domain(url)}/jobs"
 
-    # Workday and Zoho board roots vary; preserve what was discovered.
     return canonical_url(url)
 
 
+def _clean_candidate_url(candidate):
+    """Normalize URLs found inside scripts/config attributes."""
+    value = clean_text(candidate or "")
+    if not value:
+        return ""
+    value = html.unescape(value)
+    value = value.replace("\\/", "/")
+    value = value.strip(" \t\r\n'\"<>),;]}")
+    for _ in range(2):
+        decoded = unquote(value)
+        if decoded == value:
+            break
+        value = decoded
+    return canonical_url(value)
+
+
 def detect_ats_links(page_url, response_text, cfg):
-    """Discover public ATS board/job URLs embedded in a company careers page."""
+    """
+    Discover public ATS board/job URLs embedded in a company careers page.
+
+    V4.4.2 inspects anchors, iframes, script src, form actions, data attrs,
+    meta refresh redirects, and raw/encoded JavaScript config URLs.
+    """
     soup = BeautifulSoup(response_text or "", "html.parser")
     candidates = []
 
-    for tag in soup.find_all(["a", "iframe"], href=True):
-        candidates.append(urljoin(page_url, tag.get("href", "")))
-    for tag in soup.find_all("iframe", src=True):
-        candidates.append(urljoin(page_url, tag.get("src", "")))
+    attrs = ("href", "src", "action", "data-url", "data-src", "data-href", "data-apply-url")
+    for tag in soup.find_all(True):
+        for attr in attrs:
+            value = tag.get(attr)
+            if value:
+                candidates.append(urljoin(page_url, value))
 
-    # Some career pages inject ATS URLs only inside script/config text.
+    for meta in soup.find_all("meta"):
+        http_equiv = clean_text(meta.get("http-equiv", "")).lower()
+        content = clean_text(meta.get("content", ""))
+        if http_equiv == "refresh" and "url=" in content.lower():
+            target = re.split(r"url\s*=", content, flags=re.I, maxsplit=1)[-1]
+            candidates.append(urljoin(page_url, target))
+
     raw = response_text or ""
-    url_pattern = re.compile(
-        r"https?://[^\s\"'<>]+",
-        re.I,
-    )
-    candidates.extend(url_pattern.findall(raw))
+    normalized_raw = html.unescape(raw).replace("\\/", "/")
+    raw_blobs = [raw, normalized_raw, unquote(normalized_raw)]
+
+    for blob in raw_blobs:
+        url_pattern = re.compile(r"https?://[^\s\"'<>\\)\]\}]+", re.I)
+        encoded_pattern = re.compile(r"https?%3A%2F%2F[^\s\"'<>\\)\]\}]+", re.I)
+        candidates.extend(url_pattern.findall(blob))
+        candidates.extend(encoded_pattern.findall(blob))
 
     out = []
     seen = set()
     for candidate in candidates:
-        candidate = canonical_url(html.unescape(candidate))
+        candidate = _clean_candidate_url(candidate)
         if not candidate or is_blocked_domain(candidate, cfg):
             continue
         provider = ats_provider_from_url(candidate)
@@ -1802,6 +1870,7 @@ def detect_ats_links(page_url, response_text, cfg):
                 "identifier": ats_identifier_from_url(root, provider),
             })
     return out
+
 
 
 def _ats_job_base(
@@ -3858,18 +3927,41 @@ def self_test():
     assert ats_provider_from_url(
         "https://example.wd3.myworkdayjobs.com/Careers"
     ) == "Workday"
+    assert ats_provider_from_url("https://example.teamtailor.com/jobs") == "Teamtailor"
+    assert ats_provider_from_url("https://company.breezy.hr") == "Breezy"
+    assert ats_provider_from_url("https://jobs.jobvite.com/company") == "Jobvite"
+    assert ats_provider_from_url("https://company.icims.com/jobs") == "iCIMS"
+    assert ats_provider_from_url("https://company.recruitee.com") == "Recruitee"
 
-    sample_ats_html = """
-    <html><body>
+    sample_ats_html = r"""
+    <html><head>
+      <meta http-equiv="refresh" content="0; url=https://careers.smartrecruiters.com/ExampleCompany">
+    </head><body>
       <iframe src="https://jobs.lever.co/example"></iframe>
       <a href="https://jobs.ashbyhq.com/another">Open jobs</a>
+      <form action="https://apply.workable.com/sample"></form>
+      <script>
+        window.ats = "https:\/\/job-boards.greenhouse.io\/sample";
+        window.alt = "https%3A%2F%2Fexample.teamtailor.com%2Fjobs";
+      </script>
     </body></html>
     """
     ats = detect_ats_links("https://example.com/careers", sample_ats_html, cfg)
     providers = {x["provider"] for x in ats}
-    assert "Lever" in providers and "Ashby" in providers
+    assert {"Lever", "Ashby", "SmartRecruiters", "Workable", "Greenhouse", "Teamtailor"}.issubset(providers)
 
-    print("SELF TEST PASSED: V4.4 validation, blank external_id, ATS coverage, refined source quality and 500px logo rules are working.")
+    alias_cfg = dict(cfg)
+    alias_cfg["platform_blocked_domains"] = ["archdaily.com"]
+    assert is_blocked_domain(
+        "https://www-archdaily-com.global.ssl.fastly.net/opportunities",
+        alias_cfg,
+    )
+    assert "CDN/mirror" in blocked_domain_reason(
+        "https://www-archdaily-com.global.ssl.fastly.net/opportunities",
+        alias_cfg,
+    )
+
+    print("SELF TEST PASSED: V4.4.2 validation, blank external_id, CDN-safe ATS coverage, report output and 500px logo rules are working.")
 
 
 def main():
@@ -3900,7 +3992,7 @@ def main():
             print(f"SOURCES WARNING | could not update source health | {e}")
 
     print("=" * 80)
-    print(f"V4.4 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.4.2 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
