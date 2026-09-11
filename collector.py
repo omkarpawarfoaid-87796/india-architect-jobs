@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/4.3.1 "
+    "ArchitectJobsCollector/4.4 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -1661,7 +1661,482 @@ def parse_page_for_jobs(page_url, cfg, title_hint=""):
     return jobs, r
 
 
+
+ATS_HOST_PATTERNS = {
+    "Lever": (
+        "jobs.lever.co",
+        "jobs.eu.lever.co",
+    ),
+    "Greenhouse": (
+        "boards.greenhouse.io",
+        "job-boards.greenhouse.io",
+        "boards.eu.greenhouse.io",
+    ),
+    "Ashby": (
+        "jobs.ashbyhq.com",
+    ),
+    "SmartRecruiters": (
+        "careers.smartrecruiters.com",
+        "jobs.smartrecruiters.com",
+    ),
+    "Workday": (
+        "myworkdayjobs.com",
+    ),
+    "Workable": (
+        "apply.workable.com",
+    ),
+    "Zoho Recruit": (
+        "jobs.zohorecruit.com",
+        "careers.zohorecruit.com",
+    ),
+}
+
+
+def ats_provider_from_url(url):
+    """Return a supported/public ATS provider name or empty string."""
+    d = domain(url)
+    if not d:
+        return ""
+    for provider, hosts in ATS_HOST_PATTERNS.items():
+        for host in hosts:
+            if d == host or d.endswith("." + host):
+                return provider
+    if d.endswith(".freshteam.com") or ".freshteam.com" in d:
+        return "Freshteam"
+    return ""
+
+
+def ats_identifier_from_url(url, provider=None):
+    """Extract the public board/account identifier when the provider exposes one."""
+    provider = provider or ats_provider_from_url(url)
+    p = urlparse(url)
+    parts = [x for x in p.path.split("/") if x]
+    d = p.netloc.lower()
+
+    if provider in ("Lever", "Greenhouse", "Ashby", "SmartRecruiters", "Workable"):
+        return parts[0] if parts else ""
+
+    if provider == "Freshteam":
+        return d.split(".freshteam.com", 1)[0]
+
+    if provider == "Workday":
+        # Workday tenants are generally represented by the subdomain.
+        return d.split(".myworkdayjobs.com", 1)[0]
+
+    if provider == "Zoho Recruit":
+        # Zoho URLs vary heavily; retain the first useful path identifier.
+        return parts[0] if parts else d
+
+    return ""
+
+
+def ats_board_root(url):
+    """
+    Normalize known ATS job/detail URLs to a reusable public board root.
+    Generic ATS systems retain the supplied public URL.
+    """
+    provider = ats_provider_from_url(url)
+    ident = ats_identifier_from_url(url, provider)
+    p = urlparse(url)
+
+    if not provider:
+        return canonical_url(url)
+
+    if provider == "Lever" and ident:
+        host = "jobs.eu.lever.co" if "jobs.eu.lever.co" in p.netloc.lower() else "jobs.lever.co"
+        return f"https://{host}/{ident}"
+
+    if provider == "Greenhouse" and ident:
+        return f"https://job-boards.greenhouse.io/{ident}"
+
+    if provider == "Ashby" and ident:
+        return f"https://jobs.ashbyhq.com/{ident}"
+
+    if provider == "SmartRecruiters" and ident:
+        return f"https://careers.smartrecruiters.com/{ident}"
+
+    if provider == "Workable" and ident:
+        return f"https://apply.workable.com/{ident}"
+
+    if provider == "Freshteam":
+        return f"https://{domain(url)}/jobs"
+
+    # Workday and Zoho board roots vary; preserve what was discovered.
+    return canonical_url(url)
+
+
+def detect_ats_links(page_url, response_text, cfg):
+    """Discover public ATS board/job URLs embedded in a company careers page."""
+    soup = BeautifulSoup(response_text or "", "html.parser")
+    candidates = []
+
+    for tag in soup.find_all(["a", "iframe"], href=True):
+        candidates.append(urljoin(page_url, tag.get("href", "")))
+    for tag in soup.find_all("iframe", src=True):
+        candidates.append(urljoin(page_url, tag.get("src", "")))
+
+    # Some career pages inject ATS URLs only inside script/config text.
+    raw = response_text or ""
+    url_pattern = re.compile(
+        r"https?://[^\s\"'<>]+",
+        re.I,
+    )
+    candidates.extend(url_pattern.findall(raw))
+
+    out = []
+    seen = set()
+    for candidate in candidates:
+        candidate = canonical_url(html.unescape(candidate))
+        if not candidate or is_blocked_domain(candidate, cfg):
+            continue
+        provider = ats_provider_from_url(candidate)
+        if not provider:
+            continue
+        root = ats_board_root(candidate)
+        key = (provider, root)
+        if root and key not in seen:
+            seen.add(key)
+            out.append({
+                "provider": provider,
+                "url": root,
+                "identifier": ats_identifier_from_url(root, provider),
+            })
+    return out
+
+
+def _ats_job_base(
+    *,
+    title,
+    company,
+    location_text,
+    description,
+    job_type="",
+    skills="",
+    posted_date=None,
+    deadline=None,
+    source_type,
+    source_name,
+    source_url,
+    apply_url,
+    company_website="",
+):
+    location, city, state, country = detect_location(
+        " ".join(x for x in (location_text, description) if x)
+    )
+    return {
+        "title": clean_text(title),
+        "company": clean_text(company),
+        "location": location or clean_text(location_text),
+        "city": city,
+        "state": state,
+        "country": country,
+        "job_type": clean_text(job_type),
+        "experience": "",
+        "salary": "",
+        "skills": clean_text(skills),
+        "description": clean_text(description),
+        "posted_date": posted_date,
+        "deadline": deadline,
+        "source_type": source_type,
+        "source_name": source_name,
+        "source_url": canonical_url(source_url),
+        "apply_url": canonical_url(apply_url),
+        "application_method": "Public ATS",
+        "company_website": canonical_url(company_website),
+        "logo_url": "",
+        "contact_email": "",
+        "contact_phone": "",
+        "page_text": clean_text(description) + " apply now",
+    }
+
+
+def fetch_ashby(board, cfg):
+    if not board:
+        return []
+    api = (
+        "https://api.ashbyhq.com/posting-api/job-board/"
+        f"{quote(board, safe='')}?includeCompensation=true"
+    )
+    r = fetch(api, cfg)
+    if not r:
+        return []
+    try:
+        rows = r.json().get("jobs", [])
+    except Exception:
+        return []
+
+    out = []
+    for x in rows:
+        if x.get("isListed") is False:
+            continue
+        description = (
+            x.get("descriptionPlain")
+            or x.get("description")
+            or x.get("descriptionHtml")
+            or ""
+        )
+        compensation = x.get("compensation")
+        salary = clean_text(compensation) if compensation else ""
+        apply_url = (
+            x.get("applyUrl")
+            or x.get("jobUrl")
+            or x.get("url")
+            or f"https://jobs.ashbyhq.com/{board}"
+        )
+        job = _ats_job_base(
+            title=x.get("title", ""),
+            company=board.replace("-", " ").title(),
+            location_text=x.get("location", ""),
+            description=description,
+            job_type=x.get("employmentType", ""),
+            skills=" ".join(
+                clean_text(x.get(k))
+                for k in ("department", "team")
+                if x.get(k)
+            ),
+            posted_date=parse_date(
+                x.get("publishedAt")
+                or x.get("published_at")
+                or x.get("createdAt")
+            ),
+            source_type="Ashby API",
+            source_name="Ashby",
+            source_url=x.get("jobUrl") or apply_url,
+            apply_url=apply_url,
+        )
+        job["salary"] = salary
+        n = normalize_job(job, cfg)
+        if n:
+            out.append(n)
+    return out
+
+
+def _smartrecruiters_description(detail):
+    job_ad = detail.get("jobAd") or {}
+    sections = job_ad.get("sections") or {}
+    pieces = []
+    if isinstance(sections, dict):
+        for value in sections.values():
+            if isinstance(value, dict):
+                pieces.append(value.get("text") or "")
+            elif isinstance(value, str):
+                pieces.append(value)
+    return clean_text(" ".join(pieces))
+
+
+def fetch_smartrecruiters(company, cfg):
+    if not company:
+        return []
+    list_url = (
+        "https://api.smartrecruiters.com/v1/companies/"
+        f"{quote(company, safe='')}/postings?limit=100&offset=0"
+    )
+    r = fetch(list_url, cfg)
+    if not r:
+        return []
+    try:
+        rows = r.json().get("content", [])
+    except Exception:
+        return []
+
+    out = []
+    detail_limit = int(cfg.get("smartrecruiters_detail_limit", 40))
+    checked = 0
+
+    for x in rows:
+        title = clean_text(x.get("name"))
+        loc_obj = x.get("location") or {}
+        loc_parts = [
+            clean_text(loc_obj.get("city")),
+            clean_text(loc_obj.get("region")),
+            clean_text(loc_obj.get("country")),
+        ]
+        location_text = ", ".join(v for v in loc_parts if v)
+
+        # Filter cheaply before fetching details.
+        quick = {
+            "title": title,
+            "description": "",
+            "skills": "",
+        }
+        if not relevant_architecture_job(quick, cfg):
+            continue
+        if not any(marker.lower() in location_text.lower() for marker in cfg.get("india_markers", [])):
+            continue
+
+        posting_id = clean_text(x.get("id"))
+        if not posting_id or checked >= detail_limit:
+            continue
+        checked += 1
+
+        detail_url = (
+            "https://api.smartrecruiters.com/v1/companies/"
+            f"{quote(company, safe='')}/postings/{quote(posting_id, safe='')}"
+        )
+        rr = fetch(detail_url, cfg)
+        if not rr:
+            continue
+        try:
+            detail = rr.json()
+        except Exception:
+            continue
+
+        description = _smartrecruiters_description(detail)
+        apply_url = (
+            clean_text(detail.get("ref"))
+            or clean_text(x.get("ref"))
+            or f"https://jobs.smartrecruiters.com/{company}/{posting_id}"
+        )
+        employment = detail.get("typeOfEmployment") or x.get("typeOfEmployment") or {}
+        job_type = clean_text(
+            employment.get("label") if isinstance(employment, dict) else employment
+        )
+
+        job = _ats_job_base(
+            title=title,
+            company=company.replace("-", " ").title(),
+            location_text=location_text,
+            description=description,
+            job_type=job_type,
+            posted_date=parse_date(
+                detail.get("releasedDate")
+                or x.get("releasedDate")
+                or detail.get("createdOn")
+            ),
+            source_type="SmartRecruiters API",
+            source_name="SmartRecruiters",
+            source_url=apply_url,
+            apply_url=apply_url,
+        )
+        n = normalize_job(job, cfg)
+        if n:
+            out.append(n)
+
+    return out
+
+
+def extract_generic_ats_job_links(board_url, response_text, cfg):
+    """Extract public job-detail links from unsupported ATS boards."""
+    soup = BeautifulSoup(response_text or "", "html.parser")
+    out = []
+    seen = set()
+    base_domain = domain(board_url)
+
+    for a in soup.find_all("a", href=True):
+        href = canonical_url(urljoin(board_url, a.get("href", "")))
+        if not href or href in seen or is_blocked_domain(href, cfg):
+            continue
+        label = clean_text(a.get_text(" ", strip=True))
+        context = f"{label} {href}".lower()
+
+        # Stay on the ATS host for generic crawls.
+        if domain(href) != base_domain:
+            continue
+
+        pathish = any(
+            token in context
+            for token in (
+                "/job/", "/jobs/", "/jobdetails", "/job-detail",
+                "/careers/", "/positions/", "/position/",
+            )
+        )
+        roleish = relevant_architecture_job(
+            {"title": label, "description": "", "skills": ""},
+            cfg,
+        )
+        if pathish or roleish:
+            seen.add(href)
+            out.append((href, label))
+
+        if len(out) >= int(cfg.get("max_ats_job_links_per_source", 60)):
+            break
+
+    return out
+
+
+def scan_generic_ats_source(start_url, cfg):
+    r = fetch(start_url, cfg)
+    if not r:
+        return [], {
+            "source": start_url,
+            "ok": False,
+            "reason": "ATS board unreachable",
+        }
+
+    jobs = []
+    soup = BeautifulSoup(r.text, "html.parser")
+    page_text = best_main_text(soup)
+
+    for obj in jsonld_objects(soup):
+        j = job_from_jsonld(obj, r.url, soup, page_text, cfg)
+        if j:
+            jobs.append(j)
+
+    links = extract_generic_ats_job_links(r.url, r.text, cfg)
+    for url, hint in links:
+        parsed, _ = parse_page_for_jobs(url, cfg, title_hint=hint)
+        jobs.extend(parsed)
+        time.sleep(cfg.get("request_delay_seconds", 0.15))
+
+    return jobs, {
+        "source": start_url,
+        "ok": True,
+        "detail_pages_checked": len(links),
+        "qualified_jobs": len(jobs),
+    }
+
+
+def scan_ats_source(start_url, cfg):
+    provider = ats_provider_from_url(start_url)
+    ident = ats_identifier_from_url(start_url, provider)
+
+    if provider == "Lever":
+        jobs = fetch_lever(ident, cfg)
+        return jobs, {
+            "source": start_url,
+            "ok": True,
+            "ats_provider": provider,
+            "qualified_jobs": len(jobs),
+        }
+
+    if provider == "Greenhouse":
+        jobs = fetch_greenhouse(ident, cfg)
+        return jobs, {
+            "source": start_url,
+            "ok": True,
+            "ats_provider": provider,
+            "qualified_jobs": len(jobs),
+        }
+
+    if provider == "Ashby":
+        jobs = fetch_ashby(ident, cfg)
+        return jobs, {
+            "source": start_url,
+            "ok": True,
+            "ats_provider": provider,
+            "qualified_jobs": len(jobs),
+        }
+
+    if provider == "SmartRecruiters":
+        jobs = fetch_smartrecruiters(ident, cfg)
+        return jobs, {
+            "source": start_url,
+            "ok": True,
+            "ats_provider": provider,
+            "qualified_jobs": len(jobs),
+        }
+
+    # Workday / Workable / Freshteam / Zoho Recruit:
+    # crawl only public board/detail pages, no authentication or private APIs.
+    return scan_generic_ats_source(start_url, cfg)
+
+
+
 def scan_career_source(start_url, cfg):
+    # V4.4: known public ATS boards use provider-specific/public parsing.
+    if ats_provider_from_url(start_url):
+        return scan_ats_source(start_url, cfg)
+
     source_jobs = []
     r = fetch(start_url, cfg)
     if not r:
@@ -1697,11 +2172,14 @@ def scan_career_source(start_url, cfg):
         source_jobs.extend(jobs)
         time.sleep(cfg.get("request_delay_seconds", 0.15))
 
+    ats_links = detect_ats_links(r.url, r.text, cfg)
+
     return source_jobs, {
         "source": start_url,
         "ok": True,
         "detail_pages_checked": len(combined),
         "qualified_jobs": len(source_jobs),
+        "ats_boards_found": len(ats_links),
     }
 
 
@@ -3361,7 +3839,37 @@ def self_test():
     assert exported["external_id"] == ""
     assert "quality_reason" in SOURCE_HEADERS
 
-    print("SELF TEST PASSED: V4.3.1 validation, blank external_id, refined source quality, 500px logo and dynamic-source rules are working.")
+    assert ats_provider_from_url("https://jobs.lever.co/example") == "Lever"
+    assert ats_identifier_from_url("https://jobs.lever.co/example/123", "Lever") == "example"
+    assert ats_board_root("https://jobs.lever.co/example/123") == "https://jobs.lever.co/example"
+
+    assert ats_provider_from_url(
+        "https://job-boards.greenhouse.io/example/jobs/123"
+    ) == "Greenhouse"
+    assert ats_identifier_from_url(
+        "https://job-boards.greenhouse.io/example/jobs/123",
+        "Greenhouse",
+    ) == "example"
+
+    assert ats_provider_from_url("https://jobs.ashbyhq.com/example") == "Ashby"
+    assert ats_provider_from_url(
+        "https://careers.smartrecruiters.com/ExampleCompany"
+    ) == "SmartRecruiters"
+    assert ats_provider_from_url(
+        "https://example.wd3.myworkdayjobs.com/Careers"
+    ) == "Workday"
+
+    sample_ats_html = """
+    <html><body>
+      <iframe src="https://jobs.lever.co/example"></iframe>
+      <a href="https://jobs.ashbyhq.com/another">Open jobs</a>
+    </body></html>
+    """
+    ats = detect_ats_links("https://example.com/careers", sample_ats_html, cfg)
+    providers = {x["provider"] for x in ats}
+    assert "Lever" in providers and "Ashby" in providers
+
+    print("SELF TEST PASSED: V4.4 validation, blank external_id, ATS coverage, refined source quality and 500px logo rules are working.")
 
 
 def main():
@@ -3392,7 +3900,7 @@ def main():
             print(f"SOURCES WARNING | could not update source health | {e}")
 
     print("=" * 80)
-    print(f"V4.3.1 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.4 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
