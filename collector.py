@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/2.3 "
+    "ArchitectJobsCollector/3.0 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -60,6 +60,42 @@ V2_HEADERS = [
     "Status",
     "Closed Reason",
     "Fingerprint",
+]
+
+# Exact website/import schema supplied by the web developer.
+# This is the ONLY schema written to the public/export Google Sheet tab.
+WEBSITE_HEADERS = [
+    "external_id",
+    "title",
+    "description",
+    "status",
+    "employer_author",
+    "employer_email",
+    "employer_name",
+    "expiry_date",
+    "application_deadline_date",
+    "featured",
+    "urgent",
+    "filled",
+    "apply_type",
+    "apply_url",
+    "apply_email",
+    "phone",
+    "salary",
+    "max_salary",
+    "salary_type",
+    "address",
+    "location",
+    "category",
+    "type",
+    "tag",
+    "experience",
+    "gender",
+    "industry",
+    "qualification",
+    "career_level",
+    "video_url",
+    "logo_url",
 ]
 
 CITY_STATE = {
@@ -2034,6 +2070,329 @@ def job_to_record(job, first_seen=None):
     }
 
 
+
+def format_website_date(value):
+    """Format a source date as DD-MM-YYYY without inventing a date."""
+    parsed = value if isinstance(value, date) else parse_date(value)
+    return parsed.strftime("%d-%m-%Y") if parsed else ""
+
+
+def external_id_from_meta(record):
+    """Stable external ID derived from the collector's persistent Job ID."""
+    raw = clean_text(record.get("Job ID") or "")
+    if not raw:
+        fp = clean_text(record.get("Fingerprint") or "")
+        raw = job_id(fp) if fp else hashlib.sha1(
+            natural_job_key(record).encode("utf-8")
+        ).hexdigest()[:16]
+    return f"JOB-{raw.upper()}"
+
+
+def normalize_pipe_tags(value):
+    """Convert comma/semicolon skill lists to the pipe format requested by the site."""
+    items = []
+    for item in re.split(r"[,;|]+", clean_text(value or "")):
+        item = item.strip()
+        if item and item.lower() not in {x.lower() for x in items}:
+            items.append(item)
+    return "|".join(items)
+
+
+def extract_qualification_for_export(text):
+    """Best-effort qualification extraction; blank if the source does not say it."""
+    value = clean_text(text or "")
+    patterns = [
+        r"(?:qualification|education(?: requirement)?)\s*[:\-]\s*([^.;|]{3,140})",
+        r"\b(B\.?\s*Arch(?:itecture)?(?:\s*\([^)]*\))?)\b",
+        r"\b(M\.?\s*Arch(?:itecture)?(?:\s*\([^)]*\))?)\b",
+        r"\b(Bachelor'?s degree in Architecture(?:\s*\([^)]*\))?)\b",
+        r"\b(Master'?s degree in Architecture(?:\s*\([^)]*\))?)\b",
+        r"\b(Diploma (?:or degree )?in Architectural Drafting)\b",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, value, re.I)
+        if m:
+            return clean_text(m.group(1))
+    return ""
+
+
+def extract_gender_for_export(text):
+    """Only emit gender when it is explicitly stated by the vacancy."""
+    value = clean_text(text or "")
+    m = re.search(r"\bgender\s*[:\-]\s*(male|female|both|any)\b", value, re.I)
+    if not m:
+        return ""
+    word = m.group(1).lower()
+    if word in ("both", "any"):
+        return "Both"
+    return word.title()
+
+
+def career_level_for_export(title, experience):
+    low = f"{clean_text(title)} {clean_text(experience)}".lower()
+    if any(x in low for x in ("intern", "trainee")):
+        return "Entry Level"
+    if any(x in low for x in ("junior", "0-2 year", "0–2 year", "1-3 year", "1–3 year")):
+        return "Entry Level"
+    if any(x in low for x in ("senior", "lead", "principal", "associate", "director", "head")):
+        return "Senior Level"
+
+    nums = [int(x) for x in re.findall(r"\b(\d+)\b", clean_text(experience))]
+    if nums:
+        minimum = min(nums)
+        if minimum >= 7:
+            return "Senior Level"
+        if minimum >= 3:
+            return "Mid Level"
+        return "Entry Level"
+    return ""
+
+
+def industry_for_export(category):
+    cat = clean_text(category)
+    if cat == "Interior Design":
+        return "Interior Design"
+    if cat == "Landscape Architecture":
+        return "Landscape Architecture"
+    if cat == "Urban Design / Planning":
+        return "Urban Design / Planning"
+    if cat == "Visualization":
+        return "Architecture Visualization"
+    if cat == "BIM":
+        return "Architecture"
+    return "Architecture"
+
+
+def urgent_for_export(text):
+    low = clean_text(text or "").lower()
+    urgent_phrases = (
+        "urgent hiring",
+        "urgently hiring",
+        "urgent requirement",
+        "immediate requirement",
+        "immediate joining",
+        "join immediately",
+        "immediate opening",
+    )
+    return "yes" if any(p in low for p in urgent_phrases) else "no"
+
+
+def parse_salary_for_export(value):
+    """
+    Convert common Indian salary strings into salary/max_salary/salary_type.
+    Values are left blank when the source does not provide a trustworthy number.
+    """
+    text = clean_text(value or "")
+    if not text:
+        return "", "", ""
+
+    low = text.lower()
+    salary_type = ""
+    if any(x in low for x in ("per month", "/month", "monthly", "p.m.")):
+        salary_type = "Monthly"
+    elif any(x in low for x in ("per annum", "/year", "yearly", "annual", "lpa")):
+        salary_type = "Yearly"
+    elif any(x in low for x in ("per hour", "/hour", "hourly")):
+        salary_type = "Hourly"
+
+    multiplier = 100000 if "lpa" in low else 1
+    numbers = []
+    for token in re.findall(r"\d+(?:,\d{2,3})*(?:\.\d+)?", text):
+        try:
+            numbers.append(float(token.replace(",", "")) * multiplier)
+        except ValueError:
+            pass
+
+    def display_num(n):
+        if not n:
+            return ""
+        return str(int(n)) if float(n).is_integer() else str(round(n, 2))
+
+    if len(numbers) >= 2:
+        return display_num(numbers[0]), display_num(numbers[1]), salary_type
+    if len(numbers) == 1:
+        return display_num(numbers[0]), "", salary_type
+    return "", "", salary_type
+
+
+def website_record_from_meta(record, cfg):
+    """Map one verified internal collector row to the developer's exact schema."""
+    description = clean_text(
+        record.get("Full Description") or record.get("Short Description") or ""
+    )
+    company = clean_text(record.get("Company") or "")
+    email = clean_text(record.get("Public Contact Email") or "")
+    application_method = clean_text(record.get("Application Method") or "")
+    raw_apply_url = clean_text(record.get("Apply URL") or "")
+
+    is_email_apply = (
+        application_method.lower() == "email"
+        or raw_apply_url.lower().startswith("mailto:")
+    )
+    apply_type = "email" if is_email_apply else "external"
+
+    apply_email = email
+    if raw_apply_url.lower().startswith("mailto:"):
+        apply_email = raw_apply_url.split(":", 1)[1].split("?", 1)[0].strip()
+
+    # Email applications do not need a fake external URL.
+    apply_url = "" if is_email_apply else raw_apply_url
+
+    deadline = (
+        record.get("Application Deadline")
+        or record.get("Valid Through")
+        or ""
+    )
+    salary, max_salary, salary_type = parse_salary_for_export(
+        record.get("Salary") or ""
+    )
+
+    city = clean_text(record.get("City") or "")
+    state = clean_text(record.get("State") or "")
+    country = clean_text(record.get("Country") or "India") or "India"
+    address = clean_text(record.get("Location") or "")
+    if not address:
+        address = ", ".join(x for x in (city, state, country) if x)
+
+    compact_location = "|".join(x for x in (city or state, country) if x)
+
+    category = clean_text(record.get("Job Category") or "Architecture")
+    experience = clean_text(record.get("Experience") or "")
+    title = clean_text(record.get("Job Title") or "")
+
+    employer_author_mode = clean_text(
+        cfg.get("employer_author_mode", "company_name")
+    ).lower()
+    # Until the developer confirms a WP author ID/username requirement, V3 uses
+    # the employer/company name as requested in the supplied example.
+    employer_author = company
+    if employer_author_mode == "email" and email:
+        employer_author = email
+
+    return {
+        "external_id": external_id_from_meta(record),
+        "title": title,
+        "description": description,
+        "status": "publish",
+        "employer_author": employer_author,
+        "employer_email": email,
+        "employer_name": company,
+        "expiry_date": format_website_date(deadline),
+        "application_deadline_date": format_website_date(deadline),
+        "featured": "no",
+        "urgent": urgent_for_export(f"{title} {description}"),
+        "filled": "no",
+        "apply_type": apply_type,
+        "apply_url": apply_url,
+        "apply_email": apply_email,
+        "phone": clean_text(record.get("Public Contact Phone") or ""),
+        "salary": salary,
+        "max_salary": max_salary,
+        "salary_type": salary_type,
+        "address": address,
+        "location": compact_location,
+        "category": category,
+        "type": clean_text(record.get("Job Type") or ""),
+        "tag": normalize_pipe_tags(record.get("Skills") or ""),
+        "experience": experience,
+        "gender": extract_gender_for_export(description),
+        "industry": industry_for_export(category),
+        "qualification": extract_qualification_for_export(description),
+        "career_level": career_level_for_export(title, experience),
+        "video_url": "",
+        "logo_url": clean_text(record.get("Logo URL") or ""),
+    }
+
+
+def clear_sheet_tab(service, spreadsheet_id, tab):
+    """Clear all values from a worksheet while preserving the tab itself."""
+    props = get_sheet_properties(
+        service,
+        spreadsheet_id,
+        tab,
+        create_if_missing=True,
+    )
+    columns = int(props.get("gridProperties", {}).get("columnCount", 1) or 1)
+    end_col = column_letter(max(columns, len(WEBSITE_HEADERS)))
+    service.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{tab}'!A:{end_col}",
+        body={},
+    ).execute()
+
+
+def sync_website_export_sheet(service, spreadsheet_id, meta_tab, export_tab, cfg):
+    """
+    Rebuild the website-facing sheet from scratch on every run.
+
+    This intentionally removes old V2/V2.3 headers and rows from the export tab.
+    Only currently verified ACTIVE + OPEN jobs are written back.
+    """
+    meta_values = read_sheet_values(service, spreadsheet_id, meta_tab)
+    if not meta_values:
+        active_records = []
+    else:
+        meta_headers = meta_values[0]
+        active_records = []
+        for row in meta_values[1:]:
+            rec = row_to_record(meta_headers, row)
+            if (rec.get("Status") or "").strip().lower() != "active":
+                continue
+            if (rec.get("Application Status") or "").strip().lower() != "open":
+                continue
+            active_records.append(rec)
+
+    website_rows = [
+        website_record_from_meta(rec, cfg)
+        for rec in active_records
+    ]
+
+    # Stable sorting makes Google Sheet diffs easier to inspect.
+    website_rows.sort(
+        key=lambda r: (
+            r.get("employer_name", "").lower(),
+            r.get("title", "").lower(),
+            r.get("external_id", ""),
+        )
+    )
+
+    get_sheet_properties(
+        service,
+        spreadsheet_id,
+        export_tab,
+        create_if_missing=True,
+    )
+    ensure_sheet_columns(
+        service,
+        spreadsheet_id,
+        export_tab,
+        len(WEBSITE_HEADERS),
+    )
+
+    # IMPORTANT: this is the requested clean-slate behaviour.
+    clear_sheet_tab(service, spreadsheet_id, export_tab)
+
+    rows = [
+        [record.get(header, "") for header in WEBSITE_HEADERS]
+        for record in website_rows
+    ]
+    payload = [WEBSITE_HEADERS] + rows
+
+    service.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{export_tab}'!A1:{column_letter(len(WEBSITE_HEADERS))}{len(payload)}",
+        valueInputOption="RAW",
+        body={"values": payload},
+    ).execute()
+
+    print(
+        f"Website export sheet '{export_tab}' rebuilt: "
+        f"{len(website_rows)} currently open jobs"
+    )
+    return len(website_rows)
+
+
+
 def parse_existing_date(value):
     return parse_date(value)
 
@@ -2118,11 +2477,23 @@ def revalidate_existing_record(record, cfg):
 
 def write_sheet(jobs, cfg):
     sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
-    tab = os.environ.get("GOOGLE_SHEET_TAB", "Jobs")
     if not sheet_id:
         raise RuntimeError("Missing GitHub secret GOOGLE_SHEET_ID")
 
+    # Keep collector-only fields away from the website import sheet.
+    meta_tab = os.environ.get("GOOGLE_META_TAB", "_CollectorMeta")
+
+    # Backward-compatible: your existing workflow currently sets
+    # GOOGLE_SHEET_TAB=Sheet1. V3 uses that same tab as the website export tab,
+    # so the first run automatically clears all old V2 data from Sheet1.
+    export_tab = (
+        os.environ.get("GOOGLE_EXPORT_TAB")
+        or os.environ.get("GOOGLE_SHEET_TAB")
+        or "Jobs"
+    )
+
     svc = sheet_service()
+    tab = meta_tab
     headers = ensure_headers(svc, sheet_id, tab)
     values = read_sheet_values(svc, sheet_id, tab)
     rows = values[1:] if len(values) > 1 else []
@@ -2240,7 +2611,19 @@ def write_sheet(jobs, cfg):
             body={"valueInputOption": "RAW", "data": updates},
         ).execute()
 
-    return new_count, updated_count, closed_count
+    export_count = sync_website_export_sheet(
+        svc,
+        sheet_id,
+        meta_tab,
+        export_tab,
+        cfg,
+    )
+
+    print(
+        f"Internal meta tab '{meta_tab}': "
+        f"{new_count} new, {updated_count} refreshed, {closed_count} closed/stale"
+    )
+    return new_count, updated_count, closed_count, export_count
 
 
 def load_config():
@@ -2394,7 +2777,46 @@ def self_test():
     # Mojibake repair.
     assert "you’re" in clean_text("If youâ€™re interested").lower()
 
-    print("SELF TEST PASSED: V2.3 freshness, strong undated validation, deadline, dedupe, contact, encoding and job-type rules are working.")
+    export_sample = {
+        "Job ID": "abc123",
+        "Job Title": "Senior Architect",
+        "Company": "Example Architects",
+        "Location": "Mumbai, Maharashtra, India",
+        "City": "Mumbai",
+        "State": "Maharashtra",
+        "Country": "India",
+        "Job Category": "Architecture",
+        "Job Type": "Full Time",
+        "Experience": "7-10 years",
+        "Salary": "₹80000 - ₹120000 per month",
+        "Skills": "AutoCAD, Revit, Rhino",
+        "Full Description": (
+            "Qualification: Bachelor's degree in Architecture (B.Arch). "
+            "Senior Architect role."
+        ),
+        "Application Deadline": "2026-10-31",
+        "Application Status": "Open",
+        "Application Method": "External",
+        "Apply URL": "https://example.com/jobs/senior-architect",
+        "Public Contact Email": "careers@example.com",
+        "Public Contact Phone": "+91 90000 00000",
+        "Logo URL": "https://example.com/logo.svg",
+        "Status": "Active",
+        "Fingerprint": "1234567890abcdef",
+    }
+    exported = website_record_from_meta(export_sample, cfg)
+    assert list(exported.keys()) == WEBSITE_HEADERS
+    assert exported["external_id"].startswith("JOB-")
+    assert exported["status"] == "publish"
+    assert exported["location"] == "Mumbai|India"
+    assert exported["tag"] == "AutoCAD|Revit|Rhino"
+    assert exported["salary"] == "80000"
+    assert exported["max_salary"] == "120000"
+    assert exported["salary_type"] == "Monthly"
+    assert exported["application_deadline_date"] == "31-10-2026"
+    assert exported["career_level"] == "Senior Level"
+
+    print("SELF TEST PASSED: V3.0 validation and website-export schema rules are working.")
 
 
 def main():
@@ -2409,7 +2831,7 @@ def main():
     cfg = load_config()
     jobs, reports = scan_all_sources(cfg)
     print("=" * 80)
-    print(f"V2.3 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V3.0 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
@@ -2418,8 +2840,11 @@ def main():
         print(json.dumps(jobs[:20], ensure_ascii=False, indent=2))
         return
 
-    new_count, updated_count, closed_count = write_sheet(jobs, cfg)
-    print(f"Google Sheet: {new_count} new, {updated_count} refreshed, {closed_count} closed/stale")
+    new_count, updated_count, closed_count, export_count = write_sheet(jobs, cfg)
+    print(
+        f"Google Sheet complete: {export_count} open jobs in website schema "
+        f"({new_count} new / {updated_count} refreshed / {closed_count} closed internally)"
+    )
 
 
 if __name__ == "__main__":
