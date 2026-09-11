@@ -3,17 +3,16 @@ name: Daily Architect Source Discovery V4.4.2
 on:
   workflow_dispatch:
   schedule:
-    # 20:35 UTC = 02:05 IST the following day
     - cron: "35 20 * * *"
 
 concurrency:
-  group: architect-source-discovery-v4
+  group: architect-source-discovery-v442
   cancel-in-progress: false
 
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -48,15 +47,15 @@ jobs:
           GOOGLE_SOURCES_TAB: Sources
         run: python ats_discovery.py
 
-- name: Validate showable output report
-  run: python report_output.py --self-test
+      - name: Validate showable output report
+        run: python report_output.py --self-test
 
-- name: Update showable discovery output
-  env:
-    GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-    GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-    GOOGLE_SHEET_TAB: Sheet1
-    GOOGLE_META_TAB: _CollectorMeta
-    GOOGLE_SOURCES_TAB: Sources
-    GOOGLE_REPORT_TAB: AutomationOutput
-  run: python report_output.py --workflow daily-source-discovery
+      - name: Update showable discovery output
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_TAB: Sheet1
+          GOOGLE_META_TAB: _CollectorMeta
+          GOOGLE_SOURCES_TAB: Sources
+          GOOGLE_REPORT_TAB: AutomationOutput
+        run: python report_output.py --workflow daily-source-discovery
