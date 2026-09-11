@@ -1,327 +1,342 @@
-  # Architect Jobs Collector V4.3.1 — Refined Employer Classification + Fresh Job Discovery
-  # India-only architecture/design jobs.
-  # Freshness rule requested by user:
-  # - Never accept a dated job posted before 2026-09-01.
-  # - Undated jobs are accepted only when the vacancy is clearly live and publicly applyable.
-  # - Closed/expired jobs are rejected even if they are newer than the cutoff.
+# Architect Jobs Collector V4.4 — ATS Coverage + Refined Employer Classification
+# India-only architecture/design jobs.
+# Freshness rule requested by user:
+# - Never accept a dated job posted before 2026-09-01.
+# - Undated jobs are accepted only when the vacancy is clearly live and publicly applyable.
+# - Closed/expired jobs are rejected even if they are newer than the cutoff.
 
-  minimum_posted_date: "2026-09-01"
-  accept_undated_if_live_verified: true
-  undated_min_description_chars: 100
-  undated_min_evidence_score: 6
-  verify_apply_urls: true
-  revalidate_existing_jobs: true
+minimum_posted_date: "2026-09-01"
+accept_undated_if_live_verified: true
+undated_min_description_chars: 100
+undated_min_evidence_score: 6
+verify_apply_urls: true
+revalidate_existing_jobs: true
 
-  keywords:
-    include:
-      - architect
-      - architecture
-      - architectural
-      - junior architect
-      - senior architect
-      - project architect
-      - design architect
-      - interior architect
-      - interior designer
-      - landscape architect
-      - urban designer
-      - urban planner
-      - bim architect
-      - bim coordinator
-      - revit architect
-      - architectural designer
-      - 3d visualizer
-      - visualizer
-    exclude:
-      - software architect
-      - solutions architect
-      - solution architect
-      - cloud architect
-      - enterprise architect
-      - data architect
-      - security architect
-      - network architect
-      - technical architect
-      - systems architect
-      - application architect
-      - platform architect
-      - infrastructure architect
-      - aws architect
-      - azure architect
+keywords:
+  include:
+    - architect
+    - architecture
+    - architectural
+    - junior architect
+    - senior architect
+    - project architect
+    - design architect
+    - interior architect
+    - interior designer
+    - landscape architect
+    - urban designer
+    - urban planner
+    - bim architect
+    - bim coordinator
+    - revit architect
+    - architectural designer
+    - 3d visualizer
+    - visualizer
+  exclude:
+    - software architect
+    - solutions architect
+    - solution architect
+    - cloud architect
+    - enterprise architect
+    - data architect
+    - security architect
+    - network architect
+    - technical architect
+    - systems architect
+    - application architect
+    - platform architect
+    - infrastructure architect
+    - aws architect
+    - azure architect
 
-  skill_terms:
-    - AutoCAD
-    - Revit
-    - SketchUp
-    - Rhino
-    - Grasshopper
-    - BIM
-    - Lumion
-    - Enscape
-    - V-Ray
-    - 3ds Max
-    - Photoshop
-    - Illustrator
-    - InDesign
-    - ArchiCAD
+skill_terms:
+  - AutoCAD
+  - Revit
+  - SketchUp
+  - Rhino
+  - Grasshopper
+  - BIM
+  - Lumion
+  - Enscape
+  - V-Ray
+  - 3ds Max
+  - Photoshop
+  - Illustrator
+  - InDesign
+  - ArchiCAD
 
-  closed_signals:
-    - applications closed
-    - application closed
-    - no longer accepting applications
-    - no longer available
-    - position has been filled
-    - position filled
-    - position closed
-    - vacancy closed
-    - job closed
-    - this job has expired
-    - job has expired
-    - job expired
-    - posting has expired
-    - opportunity has closed
-    - recruitment closed
+closed_signals:
+  - applications closed
+  - application closed
+  - no longer accepting applications
+  - no longer available
+  - position has been filled
+  - position filled
+  - position closed
+  - vacancy closed
+  - job closed
+  - this job has expired
+  - job has expired
+  - job expired
+  - posting has expired
+  - opportunity has closed
+  - recruitment closed
 
-  open_signals:
-    - apply now
-    - apply for this job
-    - submit application
-    - submit your application
-    - current opening
-    - current openings
-    - open position
-    - open positions
-    - we are hiring
-    - we're hiring
-    - join our team
-    - send your cv
-    - send cv
-    - send your resume
-    - send resume
-    - careers@
-    - jobs@
-    - hr@
+open_signals:
+  - apply now
+  - apply for this job
+  - submit application
+  - submit your application
+  - current opening
+  - current openings
+  - open position
+  - open positions
+  - we are hiring
+  - we're hiring
+  - join our team
+  - send your cv
+  - send cv
+  - send your resume
+  - send resume
+  - careers@
+  - jobs@
+  - hr@
 
-  india_markers:
-    - india
-    - mumbai
-    - delhi
-    - new delhi
-    - gurugram
-    - gurgaon
-    - noida
-    - bengaluru
-    - bangalore
-    - hyderabad
-    - pune
-    - chennai
-    - kolkata
-    - ahmedabad
-    - surat
-    - jaipur
-    - kochi
-    - cochin
-    - kerala
-    - chandigarh
-    - mohali
-    - lucknow
-    - indore
-    - bhopal
-    - nagpur
-    - nashik
-    - vadodara
-    - goa
-    - visakhapatnam
-    - vijayawada
-    - coimbatore
-    - mysuru
-    - mysore
-    - bhubaneswar
-    - thane
-    - navi mumbai
-    - rajkot
-    - mangaluru
-    - mangalore
-    - dehradun
-    - guwahati
-    - raipur
-    - ranchi
+india_markers:
+  - india
+  - mumbai
+  - delhi
+  - new delhi
+  - gurugram
+  - gurgaon
+  - noida
+  - bengaluru
+  - bangalore
+  - hyderabad
+  - pune
+  - chennai
+  - kolkata
+  - ahmedabad
+  - surat
+  - jaipur
+  - kochi
+  - cochin
+  - kerala
+  - chandigarh
+  - mohali
+  - lucknow
+  - indore
+  - bhopal
+  - nagpur
+  - nashik
+  - vadodara
+  - goa
+  - visakhapatnam
+  - vijayawada
+  - coimbatore
+  - mysuru
+  - mysore
+  - bhubaneswar
+  - thane
+  - navi mumbai
+  - rajkot
+  - mangaluru
+  - mangalore
+  - dehradun
+  - guwahati
+  - raipur
+  - ranchi
 
-  blocked_domains:
-    - linkedin.com
-    - www.linkedin.com
+blocked_domains:
+  - linkedin.com
+  - www.linkedin.com
 
-  login_url_markers:
-    - /login
-    - /signin
-    - /sign-in
-    - /account/login
-    - /auth/login
+login_url_markers:
+  - /login
+  - /signin
+  - /sign-in
+  - /account/login
+  - /auth/login
 
-  # Public ATS board IDs/tokens can be added here as they are discovered.
-  lever_sites: []
-  greenhouse_boards: []
+# Public ATS board IDs/tokens can be added here as they are discovered.
+lever_sites: []
+greenhouse_boards: []
 
-  # Seed sources. V2 can extract JSON-LD and ordinary HTML job pages from them.
-  career_pages:
-    - "https://www.abhikalpan.in/career.html"
-    - "https://www.uha.global/careers"
-    - "https://hingooarchitects.com/careers"
-    - "https://daisaria.com/careers/"
-    - "https://www.p-cdesigns.com/careers"
-    - "https://www.morphogenesis.org/careers/"
-    - "https://www.dhapl.in/careers.html"
-    - "https://www.shreedesigns.in/careers/"
-    - "https://www.studio-cplusc.com/careers"
-    - "https://apices.in/careers"
-    - "https://www.hafeezcontractor.com/careers"
-    - "https://www.architecturebrio.com/careers/"
-    - "https://www.studiolotus.in/careers"
-    - "https://www.abindesignstudio.com/career"
+# Seed sources. V2 can extract JSON-LD and ordinary HTML job pages from them.
+career_pages:
+  - "https://www.abhikalpan.in/career.html"
+  - "https://www.uha.global/careers"
+  - "https://hingooarchitects.com/careers"
+  - "https://daisaria.com/careers/"
+  - "https://www.p-cdesigns.com/careers"
+  - "https://www.morphogenesis.org/careers/"
+  - "https://www.dhapl.in/careers.html"
+  - "https://www.shreedesigns.in/careers/"
+  - "https://www.studio-cplusc.com/careers"
+  - "https://apices.in/careers"
+  - "https://www.hafeezcontractor.com/careers"
+  - "https://www.architecturebrio.com/careers/"
+  - "https://www.studiolotus.in/careers"
+  - "https://www.abindesignstudio.com/career"
 
-  max_sitemap_pages_per_source: 20
-  max_job_links_per_source: 30
-  request_timeout_seconds: 15
-  request_delay_seconds: 0.15
-  source_workers: 6
-  revalidate_limit_per_run: 250
-
-
-  # Website export settings
-  # employer_author currently uses the company name. If the web developer later
-  # requires a WordPress employer user ID/username, change the mapping in collector.py.
-  employer_author_mode: "company_name"
+max_sitemap_pages_per_source: 20
+max_job_links_per_source: 30
+request_timeout_seconds: 15
+request_delay_seconds: 0.15
+source_workers: 6
+revalidate_limit_per_run: 250
 
 
-  # V3.1 website safety expiry
-  # Real employer deadlines remain in application_deadline_date.
-  # Undated but verified-open jobs receive a rolling website expiry that is
-  # refreshed after every successful collector run.
-  website_rolling_expiry_days: 7
+# Website export settings
+# employer_author currently uses the company name. If the web developer later
+# requires a WordPress employer user ID/username, change the mapping in collector.py.
+employer_author_mode: "company_name"
 
 
-  # -------------------------------------------------------------------
-  # V4 Sources registry + scale controls
-  # -------------------------------------------------------------------
-  hourly_source_batch_size: 80
-  source_disable_after_failures: 8
-
-  # Daily automatic discovery. The discovery workflow rotates through these
-  # cities so the free search volume stays controlled while coverage grows.
-  discovery_cities:
-    - Mumbai
-    - New Delhi
-    - Gurugram
-    - Noida
-    - Bengaluru
-    - Hyderabad
-    - Pune
-    - Chennai
-    - Kolkata
-    - Ahmedabad
-    - Jaipur
-    - Kochi
-    - Goa
-    - Chandigarh
-    - Indore
-    - Surat
-    - Coimbatore
-    - Lucknow
-    - Bhubaneswar
-    - Nagpur
-    - Vadodara
-    - Navi Mumbai
-    - Thane
-    - Dehradun
-    - Guwahati
-
-  discovery_cities_per_day: 5
-  discovery_max_queries_per_day: 20
-  discovery_results_per_query: 10
-  discovery_max_new_sources_per_day: 30
-  discovery_max_career_candidates_per_site: 10
-  discovery_min_relevance_score: 2
-  discovery_request_delay_seconds: 1.2
-
-  discovery_query_templates:
-    - '"architecture firm" careers {city} India'
-    - 'architects "join our team" {city} India'
-    - '"interior design studio" careers {city} India'
-    - '"landscape architecture" careers {city} India'
-
-  # -------------------------------------------------------------------
-  # 500 x 500 logo output
-  # -------------------------------------------------------------------
-  # V4 wraps the validated source logo with wsrv.nl so logo_url returns a
-  # 500x500 PNG using fit=contain (no stretching). The transparent background
-  # keeps non-square logos centered safely.
-  logo_500_proxy_enabled: true
-  logo_proxy_base_url: "https://wsrv.nl/"
-  logo_size_px: 500
-  logo_transparent_background: "00FFFFFF"
+# V3.1 website safety expiry
+# Real employer deadlines remain in application_deadline_date.
+# Undated but verified-open jobs receive a rolling website expiry that is
+# refreshed after every successful collector run.
+website_rolling_expiry_days: 7
 
 
-  # -------------------------------------------------------------------
-  # V4.2 Fresh Job Discovery
-  # -------------------------------------------------------------------
-  # These searches are signals only. A job is never published from LinkedIn or a
-  # job board alone; the automation must resolve a public official company source.
-  fresh_job_roles:
-    - Junior Architect
-    - Architect
-    - Senior Architect
-    - Project Architect
-    - Site Architect
-    - Interior Architect
-    - Interior Designer
-    - BIM Architect
-    - BIM Modeler
-    - Architectural Draftsman
-    - 3D Visualizer
-    - 3D Render Artist
-    - Landscape Architect
-    - Urban Designer
-    - Urban Planner
-    - Site Supervisor
-    - Project Coordinator
+# -------------------------------------------------------------------
+# V4 Sources registry + scale controls
+# -------------------------------------------------------------------
+hourly_source_batch_size: 80
+source_disable_after_failures: 8
 
-  fresh_job_cities:
-    - Mumbai
-    - Pune
-    - New Delhi
-    - Gurugram
-    - Noida
-    - Bengaluru
-    - Hyderabad
-    - Chennai
-    - Ahmedabad
-    - Kolkata
-    - Chandigarh
-    - Jaipur
-    - Kochi
-    - Goa
-    - Surat
+# Daily automatic discovery. The discovery workflow rotates through these
+# cities so the free search volume stays controlled while coverage grows.
+discovery_cities:
+  - Mumbai
+  - New Delhi
+  - Gurugram
+  - Noida
+  - Bengaluru
+  - Hyderabad
+  - Pune
+  - Chennai
+  - Kolkata
+  - Ahmedabad
+  - Jaipur
+  - Kochi
+  - Goa
+  - Chandigarh
+  - Indore
+  - Surat
+  - Coimbatore
+  - Lucknow
+  - Bhubaneswar
+  - Nagpur
+  - Vadodara
+  - Navi Mumbai
+  - Thane
+  - Dehradun
+  - Guwahati
 
-  fresh_roles_per_run: 5
-  fresh_cities_per_run: 3
-  fresh_max_queries_per_run: 24
-  fresh_max_new_sources_per_run: 20
-  fresh_request_delay_seconds: 0.8
+discovery_cities_per_day: 5
+discovery_max_queries_per_day: 20
+discovery_results_per_query: 10
+discovery_max_new_sources_per_day: 30
+discovery_max_career_candidates_per_site: 10
+discovery_min_relevance_score: 2
+discovery_request_delay_seconds: 1.2
+
+discovery_query_templates:
+  - '"architecture firm" careers {city} India'
+  - 'architects "join our team" {city} India'
+  - '"interior design studio" careers {city} India'
+  - '"landscape architecture" careers {city} India'
+
+# -------------------------------------------------------------------
+# 500 x 500 logo output
+# -------------------------------------------------------------------
+# V4 wraps the validated source logo with wsrv.nl so logo_url returns a
+# 500x500 PNG using fit=contain (no stretching). The transparent background
+# keeps non-square logos centered safely.
+logo_500_proxy_enabled: true
+logo_proxy_base_url: "https://wsrv.nl/"
+logo_size_px: 500
+logo_transparent_background: "00FFFFFF"
 
 
-  # -------------------------------------------------------------------
-  # V4.3 Source quality controls
-  # -------------------------------------------------------------------
-  # Existing discovered/fresh sources are re-audited and bad ones are marked
-  # Rejected (not deleted). Rejected sources are ignored by the hourly collector.
-  source_quality_audit_batch_size: 60
+# -------------------------------------------------------------------
+# V4.2 Fresh Job Discovery
+# -------------------------------------------------------------------
+# These searches are signals only. A job is never published from LinkedIn or a
+# job board alone; the automation must resolve a public official company source.
+fresh_job_roles:
+  - Junior Architect
+  - Architect
+  - Senior Architect
+  - Project Architect
+  - Site Architect
+  - Interior Architect
+  - Interior Designer
+  - BIM Architect
+  - BIM Modeler
+  - Architectural Draftsman
+  - 3D Visualizer
+  - 3D Render Artist
+  - Landscape Architect
+  - Urban Designer
+  - Urban Planner
+  - Site Supervisor
+  - Project Coordinator
+
+fresh_job_cities:
+  - Mumbai
+  - Pune
+  - New Delhi
+  - Gurugram
+  - Noida
+  - Bengaluru
+  - Hyderabad
+  - Chennai
+  - Ahmedabad
+  - Kolkata
+  - Chandigarh
+  - Jaipur
+  - Kochi
+  - Goa
+  - Surat
+
+fresh_roles_per_run: 5
+fresh_cities_per_run: 3
+fresh_max_queries_per_run: 24
+fresh_max_new_sources_per_run: 20
+fresh_request_delay_seconds: 0.8
 
 
-  # -------------------------------------------------------------------
-  # V4.3.1 trusted India design employers
-  # -------------------------------------------------------------------
-  # These are legitimate design employers that may not describe themselves as
-  # traditional architecture studios. They still need independent India evidence
-  # and a public careers page.
-  trusted_design_employer_domains:
-    - livspace.com
+# -------------------------------------------------------------------
+# V4.3 Source quality controls
+# -------------------------------------------------------------------
+# Existing discovered/fresh sources are re-audited and bad ones are marked
+# Rejected (not deleted). Rejected sources are ignored by the hourly collector.
+source_quality_audit_batch_size: 60
+
+
+# -------------------------------------------------------------------
+# V4.3.1 trusted India design employers
+# -------------------------------------------------------------------
+# These are legitimate design employers that may not describe themselves as
+# traditional architecture studios. They still need independent India evidence
+# and a public careers page.
+trusted_design_employer_domains:
+  - livspace.com
+
+
+# -------------------------------------------------------------------
+# V4.4 Public ATS coverage
+# -------------------------------------------------------------------
+# ATS discovery scans trusted/active employer career pages for public boards.
+ats_discovery_sources_per_run: 80
+ats_max_new_boards_per_run: 40
+
+# Generic ATS boards (Workday, Workable, Freshteam, Zoho Recruit) are crawled
+# only through their public board/job pages.
+max_ats_job_links_per_source: 60
+
+# SmartRecruiters list results are filtered before detail requests.
+smartrecruiters_detail_limit: 40
