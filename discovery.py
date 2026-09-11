@@ -30,6 +30,11 @@ DISCOVERY_BLOCKED_DOMAINS = {
     "decorilla.com",
     "people.inc",
     "condenast.com",
+    # V4.3.1 architecture media / marketplace platforms.
+    "archdaily.com",
+    "architizer.com",
+    "dezeen.com",
+    "designboom.com",
     "linkedin.com",
     "indeed.com",
     "in.indeed.com",
@@ -228,7 +233,7 @@ def fetch(url, cfg):
             timeout=int(cfg.get("request_timeout_seconds", 15)),
             headers={
                 "User-Agent": (
-                    "ArchitectJobsDiscovery/4.3 "
+                    "ArchitectJobsDiscovery/4.3.1 "
                     "(public-source discovery; no authentication bypass)"
                 ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -388,19 +393,52 @@ def generic_platform_name(company_name):
     return any(term in low for term in GENERIC_PLATFORM_NAME_TERMS)
 
 
-def official_company_quality(url, company_name, page_text, city_hint="", state_hint=""):
+def trusted_design_employer_domain(url, cfg=None):
+    """
+    Some legitimate India design employers are design-led businesses rather
+    than traditional architecture studios. V4.3.1 allows a small explicit
+    config list to pass the employer-identity gate, while still requiring
+    independent India evidence and a real public careers page.
+    """
+    cfg = cfg or {}
+    d = host(url).lower()
+    trusted = {
+        clean(x).lower().removeprefix("www.")
+        for x in cfg.get("trusted_design_employer_domains", [])
+        if clean(x)
+    }
+    d = d.removeprefix("www.")
+    return any(d == x or d.endswith("." + x) for x in trusted)
+
+
+def official_company_quality(
+    url,
+    company_name,
+    page_text,
+    city_hint="",
+    state_hint="",
+    cfg=None,
+):
     """
     Returns (accepted, reason, scores).
 
-    This gate is intentionally stricter than vacancy relevance. We only want
-    official India-relevant built-environment employers in Sources.
+    V4.3.1 classification order:
+    1. hard-block media/directories/job platforms;
+    2. require independent India evidence;
+    3. accept verified built-environment identity;
+    4. or accept a small configured trusted design-employer list.
     """
+    cfg = cfg or {}
+
     reason = hard_block_reason(url)
     if reason:
         return False, reason, {"india": 0, "identity": 0}
 
     if generic_platform_name(company_name):
-        return False, "Generic directory/media/job-platform name", {"india": 0, "identity": 0}
+        return False, "Generic directory/media/job-platform name", {
+            "india": 0,
+            "identity": 0,
+        }
 
     india_score = india_relevance_score(
         url,
@@ -416,13 +454,25 @@ def official_company_quality(url, company_name, page_text, city_hint="", state_h
             "identity": identity_score,
         }
 
+    if trusted_design_employer_domain(url, cfg):
+        return True, "", {
+            "india": india_score,
+            "identity": max(identity_score, 2),
+        }
+
     if identity_score < 2:
-        return False, f"Not verified as a built-environment employer (score {identity_score})", {
+        return False, (
+            f"Not verified as a built-environment/design employer "
+            f"(score {identity_score})"
+        ), {
             "india": india_score,
             "identity": identity_score,
         }
 
-    return True, "", {"india": india_score, "identity": identity_score}
+    return True, "", {
+        "india": india_score,
+        "identity": identity_score,
+    }
 
 
 def homepage_identity_context(url, cfg):
@@ -558,6 +608,7 @@ def validate_career_page(
         combined,
         city_hint=city_hint,
         state_hint=state_hint,
+        cfg=cfg,
     )
     if not accepted:
         return None
@@ -587,8 +638,12 @@ def validate_career_page(
         "company_website": origin(r.url),
         "page_text": career_text,
         "quality_reason": (
-            f"Verified India built-environment employer "
-            f"(India {scores['india']}, Identity {scores['identity']})"
+            (
+                "Verified trusted India design employer "
+                if trusted_design_employer_domain(r.url, cfg)
+                else "Verified India built-environment employer "
+            )
+            + f"(India {scores['india']}, Identity {scores['identity']})"
         ),
     }
 
@@ -728,11 +783,13 @@ def audit_existing_discovered_sources(service, sheet_id, tab, cfg):
 
         rec = core.row_to_record(headers, row)
         status = clean(rec.get("status") or "").lower()
-        if status == "rejected":
-            continue
-
         url = canonical(rec.get("career_url") or "")
         source_type = clean(rec.get("source_type") or "")
+
+        # V4.3.1: previously rejected trusted design employers (e.g. Livspace)
+        # get one more audit pass so they can be restored to Active.
+        if status == "rejected" and not trusted_design_employer_domain(url, cfg):
+            continue
 
         block_reason = hard_block_reason(url)
         if block_reason:
@@ -772,8 +829,8 @@ def audit_existing_discovered_sources(service, sheet_id, tab, cfg):
             rejected += 1
         else:
             rec["quality_reason"] = valid.get("quality_reason", "")
-            if status in ("warning", "new", ""):
-                # Keep Warning if operationally failing; otherwise Active.
+            if status in ("warning", "new", "", "rejected"):
+                # Trusted employers that were falsely rejected can be restored.
                 if status != "warning":
                     rec["status"] = "Active"
             row_values = [rec.get(h, "") for h in headers]
@@ -895,6 +952,25 @@ def self_test():
         city_hint="Mumbai",
     )
     assert accepted is False
+
+    assert hard_block_reason("https://www.archdaily.com/opportunities")
+    assert hard_block_reason("https://architizer.com/jobs")
+
+    trusted_cfg = {
+        "trusted_design_employer_domains": ["livspace.com"],
+    }
+    accepted, reason, scores = official_company_quality(
+        "https://www.livspace.com/in/careers",
+        "Livspace India",
+        "Livspace India provides home interior design services across India.",
+        city_hint="Mumbai",
+        cfg=trusted_cfg,
+    )
+    assert accepted is True
+    assert trusted_design_employer_domain(
+        "https://www.livspace.com/in/careers",
+        trusted_cfg,
+    )
 
     print("DISCOVERY SELF TEST PASSED")
 
