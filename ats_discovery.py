@@ -1,5 +1,5 @@
 """
-V4.4 Public ATS Discovery
+V4.4.2 Public ATS Discovery
 
 Reads trusted/active employer Sources, scans their public careers pages for
 public ATS links, and adds those boards back into Sources.
@@ -9,11 +9,13 @@ No authentication, browser login, private APIs or LinkedIn scraping is used.
 
 import argparse
 import os
+import re
 from datetime import datetime
 
 import yaml
 
 import collector as core
+import discovery as disc
 
 
 def load_config():
@@ -68,16 +70,131 @@ def existing_sources(service, sheet_id, tab):
     return headers, rows, urls
 
 
+
+ATS_SEARCH_PATTERNS = (
+    "jobs.lever.co",
+    "greenhouse.io",
+    "ashbyhq.com",
+    "smartrecruiters.com",
+    "myworkdayjobs.com",
+    "apply.workable.com",
+    "freshteam.com",
+    "zohorecruit.com",
+    "breezy.hr",
+    "teamtailor.com",
+    "jobvite.com",
+    "icims.com",
+    "recruitee.com",
+    "bamboohr.com",
+    "applytojob.com",
+)
+
+
+def parent_company_tokens(parent):
+    company = core.clean_text(parent.get("company_name") or "")
+    website = core.clean_text(parent.get("company_website") or "")
+    stem = core.company_name_from_domain(website) if website else ""
+    tokens = []
+    for value in (company, stem):
+        value = core.clean_text(value)
+        if value and value.lower() not in {x.lower() for x in tokens}:
+            tokens.append(value)
+    return tokens
+
+
+def ats_result_matches_parent(result, parent):
+    text = " ".join([
+        core.clean_text(result.get("title")),
+        core.clean_text(result.get("snippet")),
+        core.clean_text(result.get("url")),
+    ]).lower()
+
+    for token in parent_company_tokens(parent):
+        token_low = token.lower()
+        compact = re.sub(r"[^a-z0-9]", "", token_low)
+        text_compact = re.sub(r"[^a-z0-9]", "", text)
+        if token_low and token_low in text:
+            return True
+        if compact and len(compact) >= 5 and compact in text_compact:
+            return True
+    return False
+
+
+def search_hidden_ats_boards(parent, cfg):
+    """
+    V4.4.2: find hidden ATS boards only for already trusted employer names.
+    """
+    queries_per_source = int(cfg.get("ats_search_queries_per_source", 6))
+    results_per_source = int(cfg.get("ats_search_results_per_source", 8))
+
+    found = []
+    seen = set()
+    companies = parent_company_tokens(parent)
+    if not companies:
+        return found
+
+    patterns = list(cfg.get("ats_search_patterns", [])) or list(ATS_SEARCH_PATTERNS)
+    queries = []
+    for company in companies[:2]:
+        for pattern in patterns:
+            queries.append(f'"{company}" "{pattern}"')
+            if len(queries) >= queries_per_source:
+                break
+        if len(queries) >= queries_per_source:
+            break
+
+    for query in queries:
+        for result in disc.search_web(query, cfg)[:results_per_source]:
+            url = core.canonical_url(result.get("url") or "")
+            if not url or core.is_blocked_domain(url, cfg):
+                continue
+            provider = core.ats_provider_from_url(url)
+            if not provider:
+                continue
+            if not ats_result_matches_parent(result, parent):
+                continue
+
+            root = core.ats_board_root(url)
+            if not root:
+                continue
+            key = (provider, root)
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append({
+                "provider": provider,
+                "url": root,
+                "identifier": core.ats_identifier_from_url(root, provider),
+            })
+            print(f"ATS SEARCH HIT | {query} | {provider} | {root}")
+
+    return found
+
+
+
 def scan_parent_for_ats(parent, cfg):
     url = core.canonical_url(parent.get("career_url") or "")
     if not url or core.ats_provider_from_url(url):
         return []
 
-    r = core.fetch(url, cfg)
-    if not r:
-        return []
+    found = []
+    seen = set()
 
-    return core.detect_ats_links(r.url, r.text, cfg)
+    r = core.fetch(url, cfg)
+    if r:
+        for ats in core.detect_ats_links(r.url, r.text, cfg):
+            key = (ats["provider"], core.canonical_url(ats["url"]))
+            if key not in seen:
+                seen.add(key)
+                found.append(ats)
+
+    for ats in search_hidden_ats_boards(parent, cfg):
+        key = (ats["provider"], core.canonical_url(ats["url"]))
+        if key not in seen:
+            seen.add(key)
+            found.append(ats)
+
+    return found
 
 
 def append_rows(service, sheet_id, tab, headers, rows):
@@ -191,6 +308,15 @@ def self_test():
     assert row["source_type"] == "ATS Lever"
     assert row["company_name"] == "Example Architects"
     assert row["status"] == "New"
+
+    assert ats_result_matches_parent(
+        {
+            "title": "Example Architects Careers",
+            "snippet": "Example Architects jobs on Lever",
+            "url": "https://jobs.lever.co/examplearchitects",
+        },
+        parent,
+    )
 
     print("ATS DISCOVERY SELF TEST PASSED")
 
