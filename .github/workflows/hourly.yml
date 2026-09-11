@@ -1,4 +1,4 @@
-name: Hourly Architect Job Collector V3
+name: Hourly Architect Job Collector V4
 
 on:
   workflow_dispatch:
@@ -6,13 +6,13 @@ on:
     - cron: "17 * * * *"
 
 concurrency:
-  group: architect-job-collector-v3
+  group: architect-job-collector-v4
   cancel-in-progress: false
 
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -27,18 +27,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Validate V3 rules and schema
+      - name: Validate V4 rules
         run: python collector.py --self-test
 
-      - name: Run V3 collector
+      - name: Run V4 collector
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-
-          # This keeps using your current Google Sheet tab.
-          # V3 clears its old V2 rows/headers and rewrites only website-ready jobs.
           GOOGLE_SHEET_TAB: Sheet1
-
-          # Internal automation history is kept separately.
           GOOGLE_META_TAB: _CollectorMeta
+          GOOGLE_SOURCES_TAB: Sources
         run: python collector.py
