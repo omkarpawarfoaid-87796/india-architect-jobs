@@ -1,4 +1,4 @@
-# Architect Jobs Collector V4.2 — Fresh Job + Source Discovery + Website Import Schema
+# Architect Jobs Collector V4.3 — Strict India Source Quality + Fresh Job Discovery
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -307,3 +307,11 @@ fresh_cities_per_run: 3
 fresh_max_queries_per_run: 24
 fresh_max_new_sources_per_run: 20
 fresh_request_delay_seconds: 0.8
+
+
+# -------------------------------------------------------------------
+# V4.3 Source quality controls
+# -------------------------------------------------------------------
+# Existing discovered/fresh sources are re-audited and bad ones are marked
+# Rejected (not deleted). Rejected sources are ignored by the hourly collector.
+source_quality_audit_batch_size: 60
