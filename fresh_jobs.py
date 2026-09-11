@@ -1,5 +1,5 @@
 """
-V4.4.1 Fresh Job Discovery
+V4.4.2 Fresh Job Discovery
 
 Purpose:
 - Find newly surfaced architecture / built-environment job signals every few hours.
@@ -478,6 +478,7 @@ def self_test():
             delattr(disc, "DISCOVERY_BLOCKED_DOMAINS")
         assert blocked_signal_domain("https://www.linkedin.com/jobs/view/123")
         assert blocked_signal_domain("https://www.archdaily.com/opportunities")
+        assert blocked_signal_domain("https://www-archdaily-com.global.ssl.fastly.net/opportunities")
     finally:
         if had_attr:
             setattr(disc, "DISCOVERY_BLOCKED_DOMAINS", original_blocked)
