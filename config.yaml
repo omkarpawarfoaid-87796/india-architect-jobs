@@ -1,4 +1,4 @@
-# Architect Jobs Collector V4.4.4 — ATS Coverage + Showable Output Report
+# Architect Jobs Collector V4.4.5 — ATS Coverage + Showable Output Report
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -385,7 +385,7 @@ smartrecruiters_detail_limit: 40
 
 
 # -------------------------------------------------------------------
-# V4.4.4 stronger platform/CDN blocking
+# V4.4.5 stronger platform/CDN blocking
 # -------------------------------------------------------------------
 platform_blocked_domains:
   - architectandinteriorsindia.com
@@ -441,8 +441,15 @@ ats_search_patterns:
 report_tab: AutomationOutput
 
 
-# V4.4.4 fresh-job volume controls
+# V4.4.5 fresh-job volume controls
 # Fresh discovery now tries direct official job pages as sources, but only when
 # the page has hiring/apply/career signals and passes the normal job validator.
 direct_job_page_min_hiring_terms: 1
 fresh_direct_job_pages_enabled: true
+
+
+# -------------------------------------------------------------------
+# V4.4.5 hard cleanup
+# -------------------------------------------------------------------
+v445_hard_cleanup_enabled: true
+service_page_noise_reject_score: 5
