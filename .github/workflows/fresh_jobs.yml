@@ -6,13 +6,13 @@ on:
     - cron: "42 */3 * * *"
 
 concurrency:
-  group: fresh-architect-job-discovery-v42
+  group: fresh-architect-job-discovery-v443
   cancel-in-progress: false
 
 jobs:
   fresh-jobs:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -59,15 +59,15 @@ jobs:
           GOOGLE_SOURCES_TAB: Sources
         run: python collector.py
 
-- name: Validate showable output report
-  run: python report_output.py --self-test
+      - name: Validate showable output report
+        run: python report_output.py --self-test
 
-- name: Update showable fresh-job output
-  env:
-    GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-    GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-    GOOGLE_SHEET_TAB: Sheet1
-    GOOGLE_META_TAB: _CollectorMeta
-    GOOGLE_SOURCES_TAB: Sources
-    GOOGLE_REPORT_TAB: AutomationOutput
-  run: python report_output.py --workflow fresh-job-discovery
+      - name: Update showable fresh-job output
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_TAB: Sheet1
+          GOOGLE_META_TAB: _CollectorMeta
+          GOOGLE_SOURCES_TAB: Sources
+          GOOGLE_REPORT_TAB: AutomationOutput
+        run: python report_output.py --workflow fresh-job-discovery
