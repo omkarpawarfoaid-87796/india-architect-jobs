@@ -35,6 +35,16 @@ DISCOVERY_BLOCKED_DOMAINS = {
     "architizer.com",
     "dezeen.com",
     "designboom.com",
+    # V4.4.3 article / institute / education / content pages that create false fresh signals.
+    "nrd.adsttc.com",
+    "adsttc.com",
+    "aia.org",
+    "architecturelab.net",
+    "worldarchitecture.org",
+    "archinect.com",
+    "e-architect.com",
+    "stirworld.com",
+    "architectandinteriorsindia.com",
     "linkedin.com",
     "indeed.com",
     "in.indeed.com",
@@ -230,7 +240,7 @@ def fetch(url, cfg):
             timeout=int(cfg.get("request_timeout_seconds", 15)),
             headers={
                 "User-Agent": (
-                    "ArchitectJobsDiscovery/4.4.2.2 "
+                    "ArchitectJobsDiscovery/4.4.3.2 "
                     "(public-source discovery; no authentication bypass)"
                 ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -504,9 +514,50 @@ def homepage_identity_context(url, cfg):
 
 
 def careerish_url(url):
-    path = (urlparse(url).path or "").lower()
-    return any(word.replace(" ", "-") in path or word.replace("-", "") in path.replace("-", "")
-               for word in CAREER_WORDS)
+    """
+    V4.4.3: stricter than older versions.
+
+    Accept real hiring paths such as /careers, /career, /jobs, /join-us,
+    /work-with-us, /openings. Do not treat content paths such as
+    /career-growth/transcript or /architect/types as career pages.
+    """
+    p = urlparse(url)
+    path = (p.path or "").lower().strip("/")
+    if not path:
+        return False
+
+    content_bad_segments = {
+        "article", "articles", "news", "blog", "blogs", "stories",
+        "story", "transcript", "types", "guide", "guides", "learn",
+        "education", "career-growth", "resources", "resource",
+        "magazine", "project", "projects", "portfolio",
+    }
+    segments = [s for s in re.split(r"[/_.]+", path.replace("-", "-")) if s]
+    if any(seg in content_bad_segments for seg in segments):
+        return False
+    if "career-growth" in path or "architect/types" in path:
+        return False
+
+    exact_good = {
+        "career", "careers", "jobs", "job", "join-us", "joinus",
+        "work-with-us", "workwithus", "openings", "opening",
+        "vacancies", "vacancy", "hiring", "apply", "current-openings",
+        "opportunities",
+    }
+    normalized_segments = {s.replace("_", "-") for s in segments}
+    if normalized_segments & exact_good:
+        return True
+
+    # Support career.html, careers.php, jobs.aspx etc.
+    tail = segments[-1].replace("-", "").replace("_", "") if segments else ""
+    if tail in {"career", "careers", "jobs", "job", "joinus", "workwithus", "openings", "vacancies", "hiring"}:
+        return True
+
+    # Direct job detail pages are allowed when they clearly contain job terms.
+    if re.search(r"/(jobs?|careers?|openings?|positions?|vacanc(?:y|ies))/(?:[^/]+)", "/" + path):
+        return True
+
+    return False
 
 
 def relevance_score(text):
@@ -582,6 +633,45 @@ def candidate_career_links(page_url, soup, cfg):
     return out[: int(cfg.get("discovery_max_career_candidates_per_site", 12))]
 
 
+def content_or_nonhiring_page_reason(url, page_text=""):
+    """Reject content/institute/info pages that mention architects but are not hiring."""
+    p = urlparse(url)
+    path = (p.path or "").lower()
+    d = host(url).lower()
+
+    hard_content_domains = {
+        "aia.org",
+        "architecturelab.net",
+        "nrd.adsttc.com",
+        "adsttc.com",
+        "worldarchitecture.org",
+        "archinect.com",
+        "e-architect.com",
+        "stirworld.com",
+        "architectandinteriorsindia.com",
+    }
+    if any(d == x or d.endswith("." + x) for x in hard_content_domains):
+        return f"Blocked content/institute domain: {d}"
+
+    bad_path_bits = (
+        "/career-growth/", "/transcript", "/architect/types", "/article/",
+        "/articles/", "/news/", "/blog/", "/blogs/", "/guide/",
+        "/guides/", "/education/", "/resources/", "/project/", "/projects/",
+    )
+    if any(bit in path for bit in bad_path_bits):
+        low = clean(page_text).lower()
+        hiring_terms = (
+            "apply now", "apply for this job", "submit application",
+            "send your resume", "send your cv", "current openings",
+            "open positions", "job opening", "job openings", "vacancy",
+        )
+        if not any(term in low for term in hiring_terms):
+            return "Content/info page without hiring application signal"
+
+    return ""
+
+
+
 def validate_career_page(
     url,
     cfg,
@@ -599,6 +689,10 @@ def validate_career_page(
 
     soup = BeautifulSoup(r.text, "html.parser")
     career_text = core.best_main_text(soup)
+
+    content_reason = content_or_nonhiring_page_reason(r.url, career_text)
+    if content_reason:
+        return None
 
     # Resolve identity from the official homepage, not only from the career page.
     homepage_name, homepage_text = homepage_identity_context(r.url, cfg)
@@ -664,10 +758,7 @@ def discover_from_result(result, city, cfg):
     url = canonical(result.get("url"))
     if not url:
         return None
-    d = host(url)
-    if any(d == x or d.endswith("." + x) for x in DISCOVERY_BLOCKED_DOMAINS):
-        return None
-    if core.is_blocked_domain(url, cfg):
+    if hard_block_reason(url) or core.is_blocked_domain(url, cfg):
         return None
 
     r = fetch(url, cfg)
@@ -984,6 +1075,14 @@ def self_test():
         "https://www.livspace.com/in/careers",
         trusted_cfg,
     )
+
+    assert hard_block_reason("https://nrd.adsttc.com/1184508/story")
+    assert content_or_nonhiring_page_reason("https://www.aia.org/career-growth/transcript", "Architect career transcript")
+    assert content_or_nonhiring_page_reason("https://www.architecturelab.net/architect/types", "Types of architect article")
+    assert not careerish_url("https://www.aia.org/career-growth/transcript")
+    assert not careerish_url("https://www.architecturelab.net/architect/types")
+    assert careerish_url("https://examplearchitects.in/careers")
+    assert careerish_url("https://examplearchitects.in/jobs/senior-architect")
 
     print("DISCOVERY SELF TEST PASSED")
 
