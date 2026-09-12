@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/4.4.2 "
+    "ArchitectJobsCollector/4.4.3 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -3961,7 +3961,13 @@ def self_test():
         alias_cfg,
     )
 
-    print("SELF TEST PASSED: V4.4.2 validation, blank external_id, CDN-safe ATS coverage, report output and 500px logo rules are working.")
+    alias_cfg = dict(cfg)
+    alias_cfg["platform_blocked_domains"] = ["archdaily.com", "architecturelab.net", "aia.org", "nrd.adsttc.com"]
+    assert is_blocked_domain("https://www-archdaily-com.global.ssl.fastly.net/opportunities", alias_cfg)
+    assert is_blocked_domain("https://www.architecturelab.net/architect/types", alias_cfg)
+    assert is_blocked_domain("https://www.aia.org/career-growth/transcript", alias_cfg)
+
+    print("SELF TEST PASSED: V4.4.3 validation, blank external_id, stricter fresh-source gate, direct job-page capture and 500px logo rules are working.")
 
 
 def main():
@@ -3992,7 +3998,7 @@ def main():
             print(f"SOURCES WARNING | could not update source health | {e}")
 
     print("=" * 80)
-    print(f"V4.4.2 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.4.3 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
