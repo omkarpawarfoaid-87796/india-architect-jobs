@@ -35,7 +35,7 @@ DISCOVERY_BLOCKED_DOMAINS = {
     "architizer.com",
     "dezeen.com",
     "designboom.com",
-    # V4.4.3 article / institute / education / content pages that create false fresh signals.
+    # V4.4.4 article / institute / education / content pages that create false fresh signals.
     "nrd.adsttc.com",
     "adsttc.com",
     "aia.org",
@@ -234,13 +234,22 @@ def fetch(url, cfg):
         return None
     if hard_block_reason(url) or core.is_blocked_domain(url, cfg):
         return None
+
+    # V4.4.4: do not let city/service landing pages become Sources.
+    title = clean(result.get("title") or "")
+    snippet = clean(result.get("snippet") or "")
+    reason = core.real_vacancy_reject_reason(
+        {"title": title, "description": snippet, "source_url": url}, cfg
+    )
+    if reason and any(key in reason.lower() for key in ("service/location", "marketing/service", "region/career")):
+        return None
     try:
         r = requests.get(
             url,
             timeout=int(cfg.get("request_timeout_seconds", 15)),
             headers={
                 "User-Agent": (
-                    "ArchitectJobsDiscovery/4.4.3.2 "
+                    "ArchitectJobsDiscovery/4.4.4.2 "
                     "(public-source discovery; no authentication bypass)"
                 ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -515,7 +524,7 @@ def homepage_identity_context(url, cfg):
 
 def careerish_url(url):
     """
-    V4.4.3: stricter than older versions.
+    V4.4.4: stricter than older versions.
 
     Accept real hiring paths such as /careers, /career, /jobs, /join-us,
     /work-with-us, /openings. Do not treat content paths such as
