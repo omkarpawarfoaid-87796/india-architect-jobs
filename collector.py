@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/4.4.3 "
+    "ArchitectJobsCollector/4.4.4 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -1238,12 +1238,133 @@ def job_id(fp):
     return hashlib.sha1(fp.encode("utf-8")).hexdigest()[:16]
 
 
+
+SERVICE_LANDING_TITLE_PATTERNS = (
+    r"^(?:best\s+)?(?:home\s+)?interior\s+designers?\s+in\b",
+    r"^(?:best\s+)?interior\s+design\s+(?:company|companies|services?)\s+in\b",
+    r"^home\s+interior\s+designers?\s+in\b",
+    r"^home\s+interiors?\s+in\b",
+    r"^modular\s+kitchen\s+designs?\s+in\b",
+    r"^wardrobe\s+designs?\s+in\b",
+    r"^bedroom\s+designs?\s+in\b",
+    r"^living\s+room\s+designs?\s+in\b",
+    r"^bathroom\s+designs?\s+in\b",
+    r"^space\s+saving\s+furniture\s+designs?\s+in\b",
+    r"^home\s+office\s+designs?\s+in\b",
+    r"^architects?\s+in\b",
+    r"^architecture\s+firms?\s+in\b",
+)
+
+NON_JOB_TITLE_PATTERNS = (
+    r"^(?:australia\s*&\s*new\s*zealand|americas|middle\s+east|asia|uk\s*&\s*ireland)\b",
+    r"\b(?:graduate|graduates|early\s+careers?|student\s+opportunities)\b",
+    r"^(?:find|search)\s+(?:your\s+)?(?:next\s+)?opportunit",
+    r"^(?:careers?|jobs?|openings?|current\s+openings?)$",
+    r"^(?:about|contact|locations?|store\s+locator|design\s+gallery)$",
+)
+
+REAL_ROLE_TITLE_TERMS = (
+    "architect", "architecture", "architectural",
+    "interior designer", "designer", "design manager", "design lead", "design head",
+    "landscape", "urban", "planner", "bim", "revit", "cad", "autocad",
+    "draftsman", "draughtsman", "drafting", "visualizer", "visualiser",
+    "render", "3d", "artist", "modeler", "modeller", "site supervisor",
+)
+
+SERVICE_PAGE_URL_BITS = (
+    "/interior-designers-in-", "/interior-designers/", "/interior-designers-in/",
+    "/modular-kitchen-designs-in-", "/wardrobe-designs-in-",
+    "/home-interiors-in-", "/interior-design-in-", "/cities/",
+    "/home-interior-designers-in-",
+)
+
+SERVICE_PAGE_NOISE_TERMS = (
+    "get free estimate", "book free design session", "design gallery",
+    "store locator", "customer stories", "modular kitchen cost",
+    "home interior cost", "wardrobe designs", "modular kitchen designs",
+    "space saving furniture", "45-day delivery", "45 day delivery",
+    "10-year warranty", "10 year warranty", "easy emis", "emi options",
+    "experience centre", "experience center", "home interiors across india",
+    "book your order", "finalise your design", "send designs to factory",
+    "visit our", "cost calculator", "customer support", "refer and earn",
+)
+
+
+def _matches_any_pattern(value, patterns):
+    low = clean_text(value or "").lower()
+    return any(re.search(pattern, low, re.I) for pattern in patterns)
+
+
+def _service_noise_score(text):
+    low = clean_text(text or "").lower()
+    return sum(1 for term in SERVICE_PAGE_NOISE_TERMS if term in low)
+
+
+def _title_has_real_role(title):
+    low = clean_text(title or "").lower()
+    return any(term in low for term in REAL_ROLE_TITLE_TERMS)
+
+
+def real_vacancy_reject_reason(job, cfg=None):
+    """
+    V4.4.4 quality lock.
+
+    Reject service/location landing pages and generic region/career collection
+    pages before they can become website jobs. This specifically prevents rows
+    like HomeLane "Interior Designers in Ahmedabad" and AECOM
+    "Australia & New Zealand" from entering Sheet1.
+    """
+    title = clean_text(job.get("title") or "")
+    desc = clean_text(job.get("description") or job.get("page_text") or "")
+    url = canonical_url(job.get("source_url") or job.get("apply_url") or "")
+    low_url = url.lower()
+
+    if not title:
+        return "Missing job title"
+
+    if _matches_any_pattern(title, SERVICE_LANDING_TITLE_PATTERNS):
+        return "Service/location landing page title, not a vacancy"
+
+    if _matches_any_pattern(title, NON_JOB_TITLE_PATTERNS):
+        return "Generic region/career collection title, not a vacancy"
+
+    if not _title_has_real_role(title):
+        return "Title is not a real architecture/design job role"
+
+    url_service = any(bit in low_url for bit in SERVICE_PAGE_URL_BITS)
+    noise_score = _service_noise_score(desc)
+
+    if url_service and noise_score >= 3:
+        return f"Service/location marketing page, not a job post (noise {noise_score})"
+
+    if noise_score >= int((cfg or {}).get("service_page_noise_reject_score", 8)):
+        # Allow genuine careers pages with multiple role headings to pass to the
+        # inline parser, but reject single-page HTML jobs created from marketing pages.
+        source_type = clean_text(job.get("source_type") or "").lower()
+        if source_type in {"html", "json-ld", "fresh direct job page"}:
+            return f"Marketing/service page text, not a vacancy (noise {noise_score})"
+
+    # AECOM/ATS collection pages may mention India in navigation; accept only if
+    # the actual title is a role, not an area/program bucket.
+    if re.search(r"\b(?:australia|new\s+zealand|americas|middle\s+east|graduate\s+careers?|early\s+careers?)\b", title, re.I):
+        return "ATS region/program page, not an India job posting"
+
+    return ""
+
+
+
 def normalize_job(job, cfg):
     job["title"] = clean_title(job.get("title", ""), job.get("company", ""))
     if not job.get("title"):
         return None
 
     job["description"] = clean_text(job.get("description"))
+
+    # V4.4.4: reject marketing/service/location pages and generic ATS buckets
+    # before keyword/location checks. This keeps Sheet1 website-ready.
+    reject_reason = real_vacancy_reject_reason(job, cfg)
+    if reject_reason:
+        return None
     job["skills"] = clean_text(job.get("skills")) or extract_skills(job["description"], cfg)
     job["experience"] = clean_text(job.get("experience")) or extract_experience(job["description"])
     job["salary"] = clean_text(job.get("salary")) or extract_salary(job["description"])
@@ -3967,7 +4088,54 @@ def self_test():
     assert is_blocked_domain("https://www.architecturelab.net/architect/types", alias_cfg)
     assert is_blocked_domain("https://www.aia.org/career-growth/transcript", alias_cfg)
 
-    print("SELF TEST PASSED: V4.4.3 validation, blank external_id, stricter fresh-source gate, direct job-page capture and 500px logo rules are working.")
+    service_page_job = {
+        "title": "Interior Designers in Ahmedabad",
+        "company": "HomeLane",
+        "location": "Ahmedabad, Gujarat, India",
+        "city": "Ahmedabad",
+        "state": "Gujarat",
+        "country": "India",
+        "description": "Get Free Estimate Design Gallery Store Locator Modular Kitchen Cost Home Interior Cost 45-day delivery 10-year warranty Easy EMIs Book Free Design Session",
+        "source_url": "https://www.homelane.com/interior-designers-in-ahmedabad",
+        "apply_url": "mailto:hello@homelane.com",
+        "application_method": "Email",
+        "page_text": "apply now send your resume careers@ HomeLane India",
+    }
+    assert real_vacancy_reject_reason(service_page_job, cfg)
+    assert normalize_job(dict(service_page_job), cfg) is None
+
+    ats_bucket_job = {
+        "title": "Australia & New Zealand",
+        "company": "AECOM",
+        "location": "India",
+        "city": "",
+        "state": "",
+        "country": "India",
+        "description": "Graduates and Early Careers India Apply now Search for careers Architecture",
+        "source_url": "https://careers.smartrecruiters.com/AECOM2/anz---early-careers---opportunities",
+        "apply_url": "https://careers.smartrecruiters.com/AECOM2/anz---early-careers---opportunities",
+        "application_method": "Public ATS",
+        "page_text": "Apply now India Architecture careers",
+    }
+    assert real_vacancy_reject_reason(ats_bucket_job, cfg)
+    assert normalize_job(dict(ats_bucket_job), cfg) is None
+
+    real_job = {
+        "title": "Senior Interior Designer",
+        "company": "Example Design Studio",
+        "location": "Mumbai, Maharashtra, India",
+        "city": "Mumbai",
+        "state": "Maharashtra",
+        "country": "India",
+        "description": "We are hiring a Senior Interior Designer. Apply now. Send your resume. Experience 5 years. AutoCAD SketchUp.",
+        "source_url": "https://exampledesignstudio.in/careers/senior-interior-designer",
+        "apply_url": "mailto:careers@exampledesignstudio.in",
+        "application_method": "Email",
+        "page_text": "We are hiring Senior Interior Designer Mumbai India apply now send your resume careers@exampledesignstudio.in",
+    }
+    assert not real_vacancy_reject_reason(real_job, cfg)
+
+    print("SELF TEST PASSED: V4.4.4 validation, blank external_id, real-vacancy lock, LinkedIn signal-only resolution and 500px logo rules are working.")
 
 
 def main():
@@ -3998,7 +4166,7 @@ def main():
             print(f"SOURCES WARNING | could not update source health | {e}")
 
     print("=" * 80)
-    print(f"V4.4.3 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.4.4 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
