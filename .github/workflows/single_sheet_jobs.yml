@@ -1,4 +1,4 @@
-name: Single Sheet Job Finder V6
+name: Single Sheet Job Finder V6.1 Quantity
 
 on:
   workflow_dispatch:
@@ -6,13 +6,13 @@ on:
     - cron: "17 * * * *"
 
 concurrency:
-  group: single-sheet-job-finder-v6
+  group: single-sheet-job-finder-v6-quantity
   cancel-in-progress: false
 
 jobs:
   single-sheet-jobs:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -27,10 +27,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Validate V6 single-sheet rules
+      - name: Validate V6.1 single-sheet quantity rules
         run: python single_sheet_jobs.py --self-test
 
-      - name: Run V6 single-sheet job finder
+      - name: Run V6.1 single-sheet quantity finder
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}

@@ -1,4 +1,4 @@
-# Architect Jobs Collector V6 — Single Sheet Only
+# Architect Jobs Collector V6.1 — Single Sheet Quantity Mode
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -480,7 +480,7 @@ sheet_tab: Sheet1
 # V6 will not create or use CandidateJobs, RejectedJobs, Sources,
 # AutomationOutput, or _CollectorMeta. Set this true if you want V6 to delete
 # old tabs created by earlier versions after a successful Sheet1 write.
-delete_old_pipeline_tabs: false
+delete_old_pipeline_tabs: true
 old_pipeline_tabs_to_delete:
   - CandidateJobs
   - RejectedJobs
@@ -489,13 +489,13 @@ old_pipeline_tabs_to_delete:
   - _CollectorMeta
 
 # Search wider but publish only real verified jobs to Sheet1.
-v6_max_queries_per_run: 20
+v6_max_queries_per_run: 30
 v6_results_per_query: 8
-v6_max_discovered_sources_per_run: 30
+v6_max_discovered_sources_per_run: 40
 v6_signal_resolve_queries: 2
 v6_official_sources_per_signal: 2
-v6_max_sources_to_scan: 45
-v6_search_delay_seconds: 0.4
+v6_max_sources_to_scan: 70
+v6_search_delay_seconds: 0.2
 
 v6_search_queries:
   - 'site:linkedin.com/jobs "Junior Architect" India posted'
@@ -518,3 +518,69 @@ v6_search_queries:
   - '"urban designer" "current openings" India'
   - '"landscape architect" "current openings" India'
   - '"architectural draftsman" "current openings" India'
+
+
+# -------------------------------------------------------------------
+# V6.1 Quantity Mode
+# -------------------------------------------------------------------
+# This is the fix for low quantity. V6 official-only output stays clean but low.
+# V6.1 still writes only Sheet1, but it can publish real public job-detail URLs
+# from public job boards/direct web results. LinkedIn remains blocked as final URL.
+v6_quantity_mode_enabled: true
+allow_public_job_board_apply_url: true
+v6_quantity_target_records_per_run: 80
+v6_quantity_max_queries_per_run: 90
+v6_results_per_query: 10
+
+v6_quantity_search_queries:
+  - 'site:naukri.com/job-listings "Junior Architect" "Mumbai"'
+  - 'site:naukri.com/job-listings "Architect" "Mumbai"'
+  - 'site:naukri.com/job-listings "Senior Architect" "Mumbai"'
+  - 'site:naukri.com/job-listings "Interior Designer" "Mumbai"'
+  - 'site:naukri.com/job-listings "BIM" "Mumbai"'
+  - 'site:naukri.com/job-listings "3D Visualizer" "Mumbai"'
+  - 'site:naukri.com/job-listings "Architectural Draftsman" "Mumbai"'
+  - 'site:naukri.com/job-listings "Junior Architect" "Delhi"'
+  - 'site:naukri.com/job-listings "Architect" "Delhi"'
+  - 'site:naukri.com/job-listings "Interior Designer" "Delhi"'
+  - 'site:naukri.com/job-listings "BIM" "Delhi"'
+  - 'site:naukri.com/job-listings "Junior Architect" "Bengaluru"'
+  - 'site:naukri.com/job-listings "Architect" "Bengaluru"'
+  - 'site:naukri.com/job-listings "Interior Designer" "Bengaluru"'
+  - 'site:naukri.com/job-listings "BIM" "Bengaluru"'
+  - 'site:naukri.com/job-listings "Junior Architect" "Hyderabad"'
+  - 'site:naukri.com/job-listings "Architect" "Hyderabad"'
+  - 'site:naukri.com/job-listings "Interior Designer" "Hyderabad"'
+  - 'site:naukri.com/job-listings "BIM" "Hyderabad"'
+  - 'site:naukri.com/job-listings "Architect" "Pune"'
+  - 'site:naukri.com/job-listings "Interior Designer" "Pune"'
+  - 'site:naukri.com/job-listings "Architect" "Chennai"'
+  - 'site:naukri.com/job-listings "Interior Designer" "Chennai"'
+  - 'site:naukri.com/job-listings "Architect" "Ahmedabad"'
+  - 'site:naukri.com/job-listings "Interior Designer" "Ahmedabad"'
+  - 'site:in.indeed.com/viewjob "Junior Architect" "India"'
+  - 'site:in.indeed.com/viewjob "Architect" "India"'
+  - 'site:in.indeed.com/viewjob "Senior Architect" "India"'
+  - 'site:in.indeed.com/viewjob "Interior Designer" "India"'
+  - 'site:in.indeed.com/viewjob "BIM" "India"'
+  - 'site:in.indeed.com/viewjob "3D Visualizer" "India"'
+  - 'site:foundit.in/job "Junior Architect" "India"'
+  - 'site:foundit.in/job "Architect" "India"'
+  - 'site:foundit.in/job "Interior Designer" "India"'
+  - 'site:foundit.in/job "BIM" "India"'
+  - 'site:shine.com/jobs "Architect" "India"'
+  - 'site:shine.com/jobs "Interior Designer" "India"'
+  - 'site:timesjobs.com/candidate/JobDetailView.html "Architect" "India"'
+  - 'site:timesjobs.com/candidate/JobDetailView.html "Interior Designer" "India"'
+  - 'site:glassdoor.co.in/job-listing "Architect" "India"'
+  - 'site:glassdoor.co.in/job-listing "Interior Designer" "India"'
+  - '"Junior Architect" "apply now" "Mumbai" "India"'
+  - '"Senior Architect" "apply now" "Mumbai" "India"'
+  - '"Interior Designer" "apply now" "Mumbai" "India"'
+  - '"BIM Coordinator" "apply now" "India"'
+  - '"Revit Architect" "apply now" "India"'
+  - '"Architectural Designer" "apply now" "India"'
+  - '"3D Visualizer" "apply now" "India"'
+  - '"Architectural Draftsman" "apply now" "India"'
+  - '"Site Architect" "apply now" "India"'
+  - '"Project Architect" "apply now" "India"'

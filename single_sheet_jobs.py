@@ -28,22 +28,28 @@ from bs4 import BeautifulSoup
 
 import collector as core
 
-VERSION = "V6"
+VERSION = "V6.1-QUANTITY"
 ONE_SHEET_TAB = "Sheet1"
 
 # Final website schema. Do not add or remove columns without developer approval.
 WEBSITE_HEADERS = core.WEBSITE_HEADERS
 
-SIGNAL_ONLY_DOMAINS = {
-    "linkedin.com", "www.linkedin.com",
+LINKEDIN_DOMAINS = {"linkedin.com", "www.linkedin.com"}
+
+PUBLIC_JOB_BOARD_DOMAINS = {
     "indeed.com", "in.indeed.com", "www.indeed.com",
     "naukri.com", "www.naukri.com",
     "foundit.in", "www.foundit.in",
     "glassdoor.com", "glassdoor.co.in", "www.glassdoor.co.in",
     "shine.com", "www.shine.com",
     "timesjobs.com", "www.timesjobs.com",
-    "hirist.tech", "www.hirist.tech",
     "internshala.com", "www.internshala.com",
+}
+
+# LinkedIn stays signal-only. Other job boards can be published in Quantity Mode
+# only when the URL looks like a specific job detail page, not a search/list page.
+SIGNAL_ONLY_DOMAINS = LINKEDIN_DOMAINS | PUBLIC_JOB_BOARD_DOMAINS | {
+    "hirist.tech", "www.hirist.tech",
 }
 
 CONTENT_OR_DIRECTORY_DOMAINS = {
@@ -61,7 +67,7 @@ CONTENT_OR_DIRECTORY_DOMAINS = {
     "web.archive.org", "archive.org",
 }
 
-FINAL_BLOCKED_DOMAINS = SIGNAL_ONLY_DOMAINS | CONTENT_OR_DIRECTORY_DOMAINS
+FINAL_BLOCKED_DOMAINS = LINKEDIN_DOMAINS | CONTENT_OR_DIRECTORY_DOMAINS
 
 ROLE_KEYWORDS = (
     "architect", "architecture", "architectural", "interior designer",
@@ -109,6 +115,19 @@ def host(url):
     return core.domain(url or "")
 
 
+def domain_matches(url, domains):
+    d = host(url)
+    return any(d == x or d.endswith("." + x) for x in domains)
+
+
+def is_linkedin_url(url):
+    return domain_matches(url, LINKEDIN_DOMAINS)
+
+
+def is_public_job_board_url(url):
+    return domain_matches(url, PUBLIC_JOB_BOARD_DOMAINS)
+
+
 def now_ist_date():
     return core.now_ist().date()
 
@@ -129,9 +148,17 @@ def is_blocked_final_url(url, cfg=None):
     d = host(url)
     if not d:
         return True
-    for x in FINAL_BLOCKED_DOMAINS:
+    # LinkedIn is never a final apply URL.
+    if is_linkedin_url(url):
+        return True
+    # Content/directories are always blocked.
+    for x in CONTENT_OR_DIRECTORY_DOMAINS:
         if d == x or d.endswith("." + x):
             return True
+    # Quantity mode: public job boards are allowed only as final URLs when they
+    # are specific job detail pages, not search/listing/category pages.
+    if is_public_job_board_url(url):
+        return not bool(cfg and cfg.get("allow_public_job_board_apply_url", True)) or not is_specific_job_board_job_url(url)
     if cfg and core.is_blocked_domain(url, cfg):
         return True
     if any(x in url.lower() for x in ("/login", "/signin", "/sign-in", "account/login")):
@@ -165,6 +192,44 @@ def hard_reject_reason(title="", description="", url="", employer=""):
     return ""
 
 
+def is_specific_job_board_job_url(url):
+    u = (url or "").lower()
+    d = host(u)
+    path = urlparse(u).path.lower()
+    if "naukri.com" in d:
+        return "job-listings" in path or "/job-listings-" in path
+    if "indeed.com" in d:
+        return "/viewjob" in path or "jk=" in u
+    if "foundit.in" in d:
+        return "/job/" in path or "/jobs/" in path
+    if "glassdoor" in d:
+        return "job-listing" in path or "/job/" in path
+    if "shine.com" in d:
+        return "/jobs/" in path and "search" not in path
+    if "timesjobs.com" in d:
+        return "job-detail" in path or "jobdetailview" in u
+    if "internshala.com" in d:
+        return "/job/detail/" in path
+    return False
+
+
+def is_generic_job_search_page(title="", url="", snippet=""):
+    text = f"{clean(title)} {clean(snippet)}".lower()
+    u = (url or "").lower()
+    generic_markers = (
+        "jobs in ", "job vacancies", "latest jobs", "job openings in",
+        "search results", "all jobs", "career opportunities in",
+        "vacancies in ", "hiring now", "job listings",
+    )
+    if any(x in text for x in generic_markers):
+        # Direct job detail URLs can still pass; search/list pages cannot.
+        if not is_specific_job_board_job_url(url):
+            return True
+    if any(x in u for x in ("/jobs-in-", "/job-search", "?k=", "?q=", "/jobs?q", "/search")):
+        return True
+    return False
+
+
 def role_relevant(title, description=""):
     text = f"{clean(title)} {clean(description)}".lower()
     if any(x in text for x in SOFTWARE_EXCLUDES):
@@ -177,7 +242,7 @@ def has_india_location(text):
     return any(x in text_l for x in core.load_config().get("india_markers", [])) or "india" in text_l
 
 
-def public_apply_ok(record):
+def public_apply_ok(record, cfg=None):
     apply_type = clean(record.get("apply_type")).lower()
     apply_url = norm_url(record.get("apply_url"))
     apply_email = clean(record.get("apply_email") or record.get("employer_email"))
@@ -186,7 +251,7 @@ def public_apply_ok(record):
         return True
     if apply_type == "email" and apply_email:
         return True
-    if apply_url and not is_blocked_final_url(apply_url):
+    if apply_url and not is_blocked_final_url(apply_url, cfg):
         return True
     return False
 
@@ -225,10 +290,14 @@ def website_record_valid(record, cfg):
     expiry = core.parse_date(record.get("expiry_date"))
     if expiry and expiry < now_ist_date():
         return False, "Expired"
-    if not public_apply_ok(record):
+    if not public_apply_ok(record, cfg):
         return False, "No public official apply method"
-    if url and is_signal_only_url(url):
+    if url and is_linkedin_url(url):
+        return False, "Final apply URL is LinkedIn"
+    if url and is_signal_only_url(url) and not is_public_job_board_url(url):
         return False, "Final apply URL is signal-only job board"
+    if url and is_public_job_board_url(url) and not is_specific_job_board_job_url(url):
+        return False, "Job-board URL is not a specific job detail page"
     return True, "OK"
 
 
@@ -247,9 +316,12 @@ def website_record_from_job(job, cfg):
     web = core.website_record_from_meta(internal, cfg)
     web["external_id"] = ""
 
-    # Safety: never publish LinkedIn/job-board final URLs.
-    if is_signal_only_url(web.get("apply_url")):
-        return None, "Signal-only apply URL"
+    # Safety: never publish LinkedIn. Public job boards are allowed in V6.1
+    # Quantity Mode only if the URL is a specific public job detail page.
+    if is_linkedin_url(web.get("apply_url")):
+        return None, "LinkedIn final URL blocked"
+    if is_public_job_board_url(web.get("apply_url")) and not is_specific_job_board_job_url(web.get("apply_url")):
+        return None, "Generic job-board URL blocked"
     valid, reason = website_record_valid(web, cfg)
     if not valid:
         return None, reason
@@ -402,7 +474,191 @@ def official_sources_from_signal(result, cfg):
     return urls
 
 
-def discover_run_sources(cfg):
+def city_from_text(text):
+    t = clean(text).lower()
+    cities = [
+        "Mumbai", "Navi Mumbai", "Thane", "Pune", "New Delhi", "Delhi", "Gurugram", "Gurgaon", "Noida",
+        "Bengaluru", "Bangalore", "Hyderabad", "Chennai", "Ahmedabad", "Kolkata", "Jaipur", "Kochi",
+        "Goa", "Surat", "Coimbatore", "Lucknow", "Indore", "Nagpur", "Vadodara", "Chandigarh",
+        "Bhubaneswar", "Dehradun", "Guwahati", "Mysuru", "Mangalore", "Rajkot",
+    ]
+    for city in cities:
+        if city.lower() in t:
+            return city
+    return "India"
+
+
+def strip_job_board_suffix(title):
+    title = clean(html.unescape(title or ""))
+    title = re.sub(r"\s*[-|–—]\s*(Naukri\.com|Indeed|LinkedIn|Glassdoor|Foundit|Shine|TimesJobs|Internshala).*$", "", title, flags=re.I)
+    title = re.sub(r"\s*\|\s*(Naukri\.com|Indeed|LinkedIn|Glassdoor|Foundit|Shine|TimesJobs|Internshala).*$", "", title, flags=re.I)
+    title = re.sub(r"\s+Jobs?\s+(in|at)\s+.*$", "", title, flags=re.I)
+    return clean(title)
+
+
+def parse_signal_job_title_company(title, snippet="", url=""):
+    raw = clean(html.unescape(title or ""))
+    raw = re.sub(r"\s*\|\s*.*$", "", raw)
+    raw = re.sub(r"\s*[-–—]\s*(Naukri\.com|Indeed|LinkedIn|Glassdoor|Foundit|Shine|TimesJobs|Internshala).*$", "", raw, flags=re.I)
+    parts = [clean(p) for p in re.split(r"\s[-–—]\s", raw) if clean(p)]
+    company = ""
+    job_title = strip_job_board_suffix(raw)
+    if len(parts) >= 2:
+        job_title = strip_job_board_suffix(parts[0])
+        # choose a later part that looks like company, not location/experience
+        for p in parts[1:3]:
+            if not re.search(r"\b(year|yrs?|experience|mumbai|delhi|india|pune|bangalore|bengaluru|hyderabad|chennai)\b", p, re.I):
+                company = re.sub(r"\b(Hiring|Recruitment|Jobs?)\b", "", p, flags=re.I).strip()
+                break
+    m = re.search(r"\bat\s+([A-Z][A-Za-z0-9&.,'() /-]{2,80})", raw)
+    if m and not company:
+        company = clean(m.group(1))
+    if not company:
+        company = extract_company_from_signal(raw, snippet)
+    if not company:
+        d = host(url)
+        company = d.replace("www.", "").split(".")[0].title() if d else "Hiring Company"
+    # Keep titles simple; reject huge titles later.
+    job_title = re.sub(r"\bHiring For\b", "", job_title, flags=re.I).strip(" -|–—")
+    return clean(job_title[:90]), clean(company[:90])
+
+
+def infer_category(title, desc=""):
+    text = f"{title} {desc}".lower()
+    if any(x in text for x in ("bim", "revit")):
+        return "BIM"
+    if any(x in text for x in ("visualizer", "visualiser", "3d render", "3d artist", "3ds max", "lumion", "v-ray")):
+        return "Visualization"
+    if "interior" in text:
+        return "Interior Design"
+    if "landscape" in text:
+        return "Landscape Architecture"
+    if "urban" in text:
+        return "Urban Design"
+    if "draft" in text or "autocad" in text:
+        return "Drafting"
+    return "Architecture"
+
+
+def infer_career_level(title, desc=""):
+    text = f"{title} {desc}".lower()
+    if any(x in text for x in ("senior", "lead", "manager", "head")):
+        return "Senior Level"
+    if any(x in text for x in ("junior", "fresher", "entry", "0-", "0 to", "1 year")):
+        return "Entry Level"
+    return "Mid Level"
+
+
+def extract_experience(text):
+    t = clean(text)
+    m = re.search(r"(\d+\s*(?:-|to|–)\s*\d+\s*(?:years?|yrs?))", t, re.I)
+    if m:
+        return clean(m.group(1))
+    m = re.search(r"(minimum\s+\d+\s*(?:years?|yrs?))", t, re.I)
+    if m:
+        return clean(m.group(1))
+    m = re.search(r"(\d+\+?\s*(?:years?|yrs?))", t, re.I)
+    if m:
+        return clean(m.group(1))
+    return ""
+
+
+def quantity_signal_to_record(hit, cfg):
+    url = norm_url(hit.get("url"))
+    title = clean(hit.get("title"))
+    snippet = clean(BeautifulSoup(hit.get("snippet") or "", "html.parser").get_text(" "))
+    query = clean(hit.get("query"))
+    if not url or is_linkedin_url(url):
+        return None, "LinkedIn URL blocked"
+    if is_public_job_board_url(url) and not is_specific_job_board_job_url(url):
+        return None, "Not a specific job-board detail URL"
+    if is_generic_job_search_page(title, url, snippet):
+        return None, "Generic job search page"
+    job_title, employer = parse_signal_job_title_company(title, snippet, url)
+    if len(job_title) < 4 or len(job_title) > 95:
+        return None, "Bad title length"
+    if hard_reject_reason(job_title, snippet, url, employer):
+        return None, hard_reject_reason(job_title, snippet, url, employer)
+    if not role_relevant(job_title, snippet):
+        return None, "Role not relevant"
+    text_for_loc = " ".join([title, snippet, query, url])
+    if not has_india_location(text_for_loc):
+        return None, "Not India-based"
+    city = city_from_text(text_for_loc)
+    location = f"{city}|India" if city != "India" else "India"
+    address = f"{city}, India" if city != "India" else "India"
+    if is_blocked_final_url(url, cfg):
+        return None, "Final URL blocked"
+    desc = snippet or f"{job_title} opening at {employer}. Public job source detected by V6.1 Quantity Mode."
+    exp = extract_experience(f"{title} {snippet}")
+    tag_terms = []
+    for term in cfg.get("skill_terms", []):
+        if term.lower() in f"{title} {snippet}".lower():
+            tag_terms.append(term)
+    rec = {h: "" for h in WEBSITE_HEADERS}
+    rec.update({
+        "external_id": "",
+        "title": job_title,
+        "description": desc[: int(cfg.get("max_description_chars", 1800))],
+        "status": "publish",
+        "employer_author": employer,
+        "employer_email": "",
+        "employer_name": employer,
+        "expiry_date": ddmmyyyy(now_ist_date() + timedelta(days=int(cfg.get("website_rolling_expiry_days", 7)))),
+        "application_deadline_date": "",
+        "featured": "no",
+        "urgent": "no",
+        "filled": "no",
+        "apply_type": "external",
+        "apply_url": url,
+        "apply_email": "",
+        "phone": "",
+        "address": address,
+        "location": location,
+        "category": infer_category(job_title, snippet),
+        "tag": "|".join(tag_terms[:8]),
+        "experience": exp,
+        "industry": infer_category(job_title, snippet),
+        "qualification": "",
+        "career_level": infer_career_level(job_title, snippet),
+        "logo_url": "",
+    })
+    ok, reason = website_record_valid(rec, cfg)
+    if not ok:
+        return None, reason
+    return rec, "OK"
+
+
+def collect_quantity_records(cfg):
+    if not bool(cfg.get("v6_quantity_mode_enabled", True)):
+        return []
+    records = []
+    seen_urls = set()
+    queries = cfg.get("v6_quantity_search_queries") or cfg.get("v6_search_queries", [])
+    max_queries = int(cfg.get("v6_quantity_max_queries_per_run", 80))
+    target = int(cfg.get("v6_quantity_target_records_per_run", 75))
+    print("=" * 80)
+    print(f"V6.1 QUANTITY MODE | queries={min(len(queries), max_queries)} target={target}")
+    print("=" * 80)
+    for query in queries[:max_queries]:
+        print(f"V6.1 JOB SEARCH | {query}")
+        for hit in bing_rss(query, cfg):
+            u = norm_url(hit.get("url"))
+            if not u or u in seen_urls:
+                continue
+            seen_urls.add(u)
+            rec, reason = quantity_signal_to_record(hit, cfg)
+            if rec:
+                records.append(rec)
+                print(f"V6.1 ACCEPT SIGNAL JOB | {rec.get('employer_name')} | {rec.get('title')} | {u}")
+            else:
+                print(f"V6.1 REJECT SIGNAL | {hit.get('title')} | {reason}")
+            if len(records) >= target:
+                return records
+        time.sleep(float(cfg.get("v6_search_delay_seconds", 0.25)))
+    return records
+
+
     sources = []
     seen = set()
 
@@ -423,13 +679,16 @@ def discover_run_sources(cfg):
             if not u:
                 continue
 
-            if is_signal_only_url(u):
-                # LinkedIn/job board signal only. Resolve to official sources.
+            if is_linkedin_url(u):
+                # LinkedIn stays discovery signal only. Resolve to official sources.
                 for official in official_sources_from_signal(hit, cfg):
                     if official not in seen and not is_blocked_final_url(official, cfg):
                         seen.add(official)
                         sources.append(official)
                         print(f"V6 SIGNAL RESOLVED | {hit.get('title')} -> {official}")
+                continue
+            if is_public_job_board_url(u):
+                # Public job-board detail records are handled by Quantity Mode, not scanned as employer sources.
                 continue
 
             if is_blocked_final_url(u, cfg):
@@ -460,11 +719,12 @@ def jobs_from_sources(sources, cfg):
     return jobs, reports
 
 
-def build_single_sheet_records(existing_records, jobs, cfg):
+def build_single_sheet_records(existing_records, jobs, cfg, extra_records=None):
     accepted = []
     rejected_count = 0
     existing_kept = 0
     new_added = 0
+    quantity_added = 0
     by_key = {}
 
     for rec in existing_records:
@@ -489,9 +749,21 @@ def build_single_sheet_records(existing_records, jobs, cfg):
             new_added += 1
         by_key[key] = web
 
+    for web in (extra_records or []):
+        web = normalize_existing_row(web, cfg)
+        valid, reason = website_record_valid(web, cfg)
+        if not valid:
+            rejected_count += 1
+            print(f"V6.1 REJECT EXTRA | {web.get('employer_name')} | {web.get('title')} | {reason}")
+            continue
+        key = web_key(web)
+        if key not in by_key:
+            quantity_added += 1
+        by_key[key] = web
+
     accepted = list(by_key.values())
     accepted.sort(key=lambda r: (clean(r.get("employer_name")).lower(), clean(r.get("title")).lower()))
-    return accepted, {"existing_kept": existing_kept, "new_added": new_added, "rejected_count": rejected_count}
+    return accepted, {"existing_kept": existing_kept, "new_added": new_added, "quantity_added": quantity_added, "rejected_count": rejected_count}
 
 
 def load_config():
@@ -515,12 +787,19 @@ def run(dry_run=False):
 
     jobs, reports = jobs_from_sources(sources, cfg)
     print("=" * 80)
-    print(f"V6 parsed/validated jobs before Sheet1 merge: {len(jobs)}")
+    print(f"V6 parsed/validated official jobs before Sheet1 merge: {len(jobs)}")
+    print("=" * 80)
+
+    quantity_records = collect_quantity_records(cfg)
+    print("=" * 80)
+    print(f"V6.1 quantity-mode public-source records before Sheet1 merge: {len(quantity_records)}")
     print("=" * 80)
 
     if dry_run:
         for j in jobs[:20]:
             print(json.dumps({"title": j.get("title"), "company": j.get("company"), "apply_url": j.get("apply_url")}, ensure_ascii=False))
+        for r in quantity_records[:20]:
+            print(json.dumps({"title": r.get("title"), "company": r.get("employer_name"), "apply_url": r.get("apply_url")}, ensure_ascii=False))
         return
 
     sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
@@ -534,15 +813,16 @@ def run(dry_run=False):
     service = core.sheet_service()
     ensure_sheet1(service, sheet_id, tab)
     existing = read_sheet1(service, sheet_id, tab)
-    records, stats = build_single_sheet_records(existing, jobs, cfg)
+    records, stats = build_single_sheet_records(existing, jobs, cfg, extra_records=quantity_records)
     write_sheet1_only(service, sheet_id, tab, records)
     deleted = delete_old_pipeline_tabs(service, sheet_id, cfg)
 
     print("=" * 80)
-    print("V6 SINGLE SHEET COMPLETE")
+    print("V6.1 SINGLE SHEET QUANTITY COMPLETE")
     print(f"Sheet tab: {tab}")
     print(f"Existing kept: {stats['existing_kept']}")
-    print(f"New/updated accepted jobs: {stats['new_added']}")
+    print(f"New/updated official accepted jobs: {stats['new_added']}")
+    print(f"New/updated public-source quantity jobs: {stats.get('quantity_added', 0)}")
     print(f"Rejected/cleaned rows this run: {stats['rejected_count']}")
     print(f"Final Sheet1 website-ready jobs: {len(records)}")
     print(f"Old extra tabs deleted: {deleted}")
@@ -580,6 +860,16 @@ def self_test():
     ok, reason = website_record_valid(linkedin, cfg)
     assert not ok
 
+    public_board = dict(linkedin)
+    public_board.update({
+        "apply_url": "https://www.naukri.com/job-listings-junior-architect-abc-architects-mumbai-1-to-3-years-123",
+        "description": "Junior Architect opening in Mumbai India. Apply now. Experience 1 to 3 years.",
+        "apply_type": "external",
+        "filled": "no",
+    })
+    ok, reason = website_record_valid(public_board, {**cfg, "allow_public_job_board_apply_url": True})
+    assert ok, reason
+
     good = dict(bad)
     good.update({
         "external_id": "SHOULD_CLEAR",
@@ -605,7 +895,7 @@ def self_test():
     assert rows[0]["external_id"] == ""
     assert stats["rejected_count"] == 1
 
-    print("V6 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, LinkedIn signal-only rule, dedupe and blank external_id are working.")
+    print("V6.1 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, LinkedIn blocked, public job-board detail URLs allowed for quantity mode, dedupe and blank external_id are working.")
 
 
 def main():

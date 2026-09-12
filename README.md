@@ -1,72 +1,43 @@
-# India Architect Jobs Collector V6 — Single Sheet Only
+# Architect Job Collector V6.1 — Single Sheet Quantity Mode
 
-V6 follows the new requirement: output only to `Sheet1`.
+This version fixes the low-quantity issue from V6.
 
-## What changed from V5
+## Output
 
-V5 created multiple tabs: CandidateJobs, RejectedJobs, AutomationOutput, Sources, and _CollectorMeta.
-V6 does not use those tabs.
+Only one Google Sheet tab is used for website output:
 
-The website developer should connect only to:
+- `Sheet1`
 
-`Sheet1`
+Old pipeline tabs are deleted automatically after a successful run:
 
-## V6 flow
+- `_CollectorMeta`
+- `Sources`
+- `CandidateJobs`
+- `AutomationOutput`
+- `RejectedJobs`
 
-1. Read existing `Sheet1`.
-2. Remove fake, expired, duplicate, LinkedIn-final, and service-page rows.
-3. Search multiple public sources:
-   - company career pages
-   - official employer websites
-   - public ATS boards
-   - Bing/Google-style public search signals
-   - LinkedIn/job-board signals as discovery signals only
-4. Resolve LinkedIn/job-board signals to official employer pages where possible.
-5. Validate public apply method.
-6. Rebuild only `Sheet1` with website-ready jobs.
+## What changed from V6
 
-## Important LinkedIn rule
+V6 was too strict. It used LinkedIn/job boards as signals but published only jobs resolved to official employer pages. That kept the output clean but low.
 
-LinkedIn can be used only to discover that a company has a job.
-The final `apply_url` in Sheet1 will never be a LinkedIn URL.
+V6.1 keeps one-sheet output, but adds Quantity Mode:
 
-Allowed final apply methods:
+- Company career pages are still scanned.
+- Public web searches are used.
+- LinkedIn stays signal-only and is never published as final `apply_url`.
+- Public job-board detail pages are allowed as final `apply_url` when they look like a specific real job detail page.
+- Search/list/category/service/content pages are rejected.
 
-- official company careers page
-- official job page
-- public ATS apply page
-- official application form
-- employer email
+## Website rule
 
-## Sheet1 schema
+The website developer should use only `Sheet1`.
 
-V6 uses the exact developer schema:
+`external_id` stays blank because the website developer generates IDs.
 
-external_id, title, description, status, employer_author, employer_email,
-employer_name, expiry_date, application_deadline_date, featured, urgent,
-filled, apply_type, apply_url, apply_email, phone, salary, max_salary,
-salary_type, address, location, category, type, tag, experience, gender,
-industry, qualification, career_level, video_url, logo_url
+## Workflow
 
-`external_id` always remains blank.
+Run only:
 
-## Important repo cleanup
+`Single Sheet Job Finder V6.1 Quantity`
 
-Before pushing V6, remove old workflow files from earlier versions:
-
-- .github/workflows/hourly.yml
-- .github/workflows/discovery.yml
-- .github/workflows/fresh_jobs.yml
-- .github/workflows/candidate_jobs.yml
-
-Then add only:
-
-- .github/workflows/single_sheet_jobs.yml
-
-## Run order
-
-Run only one workflow:
-
-`Single Sheet Job Finder V6`
-
-It runs hourly on schedule and can also be run manually.
+Expected runtime: 5–25 minutes depending on search results.
