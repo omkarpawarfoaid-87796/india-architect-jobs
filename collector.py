@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/4.4.4 "
+    "ArchitectJobsCollector/4.4.5 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -1241,6 +1241,8 @@ def job_id(fp):
 
 SERVICE_LANDING_TITLE_PATTERNS = (
     r"^(?:best\s+)?(?:home\s+)?interior\s+designers?\s+in\b",
+    r"^(?:top\s+)?(?:home\s+)?interior\s+designers?\s+in\b",
+    r"^(?:best\s+)?(?:home\s+)?interior\s+designer\s+near\s+me\b",
     r"^(?:best\s+)?interior\s+design\s+(?:company|companies|services?)\s+in\b",
     r"^home\s+interior\s+designers?\s+in\b",
     r"^home\s+interiors?\s+in\b",
@@ -1251,12 +1253,15 @@ SERVICE_LANDING_TITLE_PATTERNS = (
     r"^bathroom\s+designs?\s+in\b",
     r"^space\s+saving\s+furniture\s+designs?\s+in\b",
     r"^home\s+office\s+designs?\s+in\b",
+    r"^interior\s+decorators?\s+in\b",
+    r"^interior\s+design\s+ideas?\b",
     r"^architects?\s+in\b",
     r"^architecture\s+firms?\s+in\b",
 )
 
 NON_JOB_TITLE_PATTERNS = (
     r"^(?:australia\s*&\s*new\s*zealand|americas|middle\s+east|asia|uk\s*&\s*ireland)\b",
+    r"^(?:india|asia|global|international)\s+(?:early\s+careers?|graduate\s+careers?|opportunities?)\b",
     r"\b(?:graduate|graduates|early\s+careers?|student\s+opportunities)\b",
     r"^(?:find|search)\s+(?:your\s+)?(?:next\s+)?opportunit",
     r"^(?:careers?|jobs?|openings?|current\s+openings?)$",
@@ -1273,20 +1278,23 @@ REAL_ROLE_TITLE_TERMS = (
 
 SERVICE_PAGE_URL_BITS = (
     "/interior-designers-in-", "/interior-designers/", "/interior-designers-in/",
+    "/interior-designers-in", "/best-interior-designers-in",
     "/modular-kitchen-designs-in-", "/wardrobe-designs-in-",
     "/home-interiors-in-", "/interior-design-in-", "/cities/",
     "/home-interior-designers-in-",
 )
 
 SERVICE_PAGE_NOISE_TERMS = (
-    "get free estimate", "book free design session", "design gallery",
+    "get free estimate", "book free design session", "book virtual meeting", "design gallery",
     "store locator", "customer stories", "modular kitchen cost",
     "home interior cost", "wardrobe designs", "modular kitchen designs",
     "space saving furniture", "45-day delivery", "45 day delivery",
     "10-year warranty", "10 year warranty", "easy emis", "emi options",
     "experience centre", "experience center", "home interiors across india",
     "book your order", "finalise your design", "send designs to factory",
-    "visit our", "cost calculator", "customer support", "refer and earn",
+    "visit our", "schedule visit", "floor plan", "cost calculator", "customer support",
+    "refer and earn", "home interiors", "modular kitchens", "popular services",
+    "popular blogs", "sitemap interior design", "experience centres", "experience centers",
 )
 
 
@@ -1349,6 +1357,103 @@ def real_vacancy_reject_reason(job, cfg=None):
     if re.search(r"\b(?:australia|new\s+zealand|americas|middle\s+east|graduate\s+careers?|early\s+careers?)\b", title, re.I):
         return "ATS region/program page, not an India job posting"
 
+    return ""
+
+
+
+def meta_record_vacancy_reject_reason(record, cfg=None):
+    """
+    V4.4.5 hard cleanup for old rows already stored in _CollectorMeta.
+
+    Earlier versions may have written service/location pages (for example
+    HomeLane city pages) or ATS region bucket pages (for example AECOM
+    Australia & New Zealand). This maps old meta rows back into the normal
+    validator so they can be closed and removed from Sheet1.
+    """
+    job = {
+        "title": record.get("Job Title") or record.get("title") or "",
+        "company": record.get("Company") or record.get("employer_name") or "",
+        "location": record.get("Location") or record.get("address") or "",
+        "city": record.get("City") or "",
+        "state": record.get("State") or "",
+        "country": record.get("Country") or "India",
+        "description": (
+            record.get("Full Description")
+            or record.get("Short Description")
+            or record.get("description")
+            or ""
+        ),
+        "source_url": record.get("Source URL") or record.get("apply_url") or "",
+        "apply_url": record.get("Apply URL") or record.get("apply_url") or "",
+        "source_type": record.get("Source Type") or "",
+        "page_text": (
+            record.get("Full Description")
+            or record.get("Short Description")
+            or record.get("description")
+            or ""
+        ),
+    }
+
+    reason = real_vacancy_reject_reason(job, cfg or {})
+    if reason:
+        return f"V4.4.5 hard cleanup: {reason}"
+
+    company = clean_text(job["company"]).lower()
+    title = clean_text(job["title"]).lower()
+    desc = clean_text(job["description"]).lower()
+    url = canonical_url(job["source_url"] or job["apply_url"]).lower()
+
+    if "homelane" in company and (
+        _matches_any_pattern(title, SERVICE_LANDING_TITLE_PATTERNS)
+        or any(bit in url for bit in SERVICE_PAGE_URL_BITS)
+        or _service_noise_score(desc) >= 5
+    ):
+        return "V4.4.5 hard cleanup: HomeLane city/service landing page, not a vacancy"
+
+    if "aecom" in company and re.search(
+        r"\b(?:australia|new zealand|anz|americas|middle east|early careers|graduate careers)\b",
+        f"{title} {url}",
+        re.I,
+    ):
+        return "V4.4.5 hard cleanup: AECOM region/program bucket page, not an India job posting"
+
+    return ""
+
+
+def source_page_hard_reject_reason(url, title="", page_text="", cfg=None):
+    """
+    V4.4.5 source-level cleanup.
+
+    Reject sources that are actually service/location pages before they keep
+    recreating fake jobs on every hourly run.
+    """
+    candidate = {
+        "title": title or "",
+        "description": page_text or "",
+        "source_url": url or "",
+        "apply_url": url or "",
+        "source_type": "Source Page",
+    }
+    reason = real_vacancy_reject_reason(candidate, cfg or {})
+    low_reason = reason.lower()
+    if reason and any(
+        key in low_reason
+        for key in (
+            "service/location",
+            "marketing/service",
+            "region/career",
+            "ats region/program",
+        )
+    ):
+        return f"V4.4.5 source cleanup: {reason}"
+
+    low_url = canonical_url(url or "").lower()
+    low_text = clean_text(page_text or "").lower()
+    low_title = clean_text(title or "").lower()
+    if any(bit in low_url for bit in SERVICE_PAGE_URL_BITS) and _service_noise_score(low_text) >= 3:
+        return "V4.4.5 source cleanup: service/location marketing page, not a hiring source"
+    if re.search(r"\b(?:australia|new zealand|anz|graduate careers|early careers)\b", f"{low_title} {low_url}"):
+        return "V4.4.5 source cleanup: ATS region/program bucket, not an India job source"
     return ""
 
 
@@ -2335,6 +2440,17 @@ def scan_career_source(start_url, cfg):
     soup = BeautifulSoup(r.text, "html.parser")
     page_text = best_main_text(soup)
 
+    page_title = clean_text(soup.title.get_text(" ", strip=True) if soup.title else "")
+    source_reject = source_page_hard_reject_reason(r.url, page_title, page_text, cfg)
+    if source_reject:
+        return source_jobs, {
+            "source": start_url,
+            "ok": False,
+            "reason": source_reject,
+            "hard_reject_source": True,
+            "qualified_jobs": 0,
+        }
+
     # Structured jobs directly on careers page.
     for obj in jsonld_objects(soup):
         j = job_from_jsonld(obj, r.url, soup, page_text, cfg)
@@ -3254,6 +3370,10 @@ def sync_website_export_sheet(service, spreadsheet_id, meta_tab, export_tab, cfg
                 continue
             if (rec.get("Application Status") or "").strip().lower() != "open":
                 continue
+            # V4.4.5: never export old fake rows even before their meta row is
+            # closed by revalidation. Sheet1 must remain website-ready.
+            if meta_record_vacancy_reject_reason(rec, cfg):
+                continue
             active_records.append(rec)
 
     website_rows = [
@@ -3313,6 +3433,10 @@ def parse_existing_date(value):
 
 
 def revalidate_existing_record(record, cfg):
+    hard_reason = meta_record_vacancy_reject_reason(record, cfg)
+    if hard_reason:
+        return False, hard_reason
+
     cutoff = minimum_date(cfg)
     posted = parse_existing_date(record.get("Posted Date"))
     deadline = parse_existing_date(record.get("Application Deadline") or record.get("Valid Through"))
@@ -3771,6 +3895,12 @@ def update_sources_from_reports(reports, cfg):
             rec["jobs_found"] = str(int(report.get("qualified_jobs", 0) or 0))
             rec["consecutive_failures"] = "0"
             rec["status"] = "Active"
+            rec["quality_reason"] = rec.get("quality_reason", "") or "Checked successfully"
+        elif report.get("hard_reject_source"):
+            rec["jobs_found"] = "0"
+            rec["consecutive_failures"] = "0"
+            rec["status"] = "Rejected"
+            rec["quality_reason"] = clean_text(report.get("reason") or "V4.4.5 hard rejected source")
         else:
             try:
                 failures = int(float(rec.get("consecutive_failures") or 0)) + 1
@@ -3778,6 +3908,7 @@ def update_sources_from_reports(reports, cfg):
                 failures = 1
             rec["consecutive_failures"] = str(failures)
             rec["status"] = "Inactive" if failures >= disable_after else "Warning"
+            rec["quality_reason"] = clean_text(report.get("reason") or rec.get("quality_reason") or "Temporary source check failure")
 
         row_values = [rec.get(h, "") for h in headers]
         updates.append(
@@ -4103,6 +4234,21 @@ def self_test():
     }
     assert real_vacancy_reject_reason(service_page_job, cfg)
     assert normalize_job(dict(service_page_job), cfg) is None
+    assert meta_record_vacancy_reject_reason({
+        "Job Title": "Interior Designers in Ahmedabad",
+        "Company": "HomeLane",
+        "Full Description": service_page_job["description"],
+        "Source URL": service_page_job["source_url"],
+        "Apply URL": "mailto:hello@homelane.com",
+        "Status": "Active",
+        "Application Status": "Open",
+    }, cfg)
+    assert source_page_hard_reject_reason(
+        service_page_job["source_url"],
+        service_page_job["title"],
+        service_page_job["description"],
+        cfg,
+    )
 
     ats_bucket_job = {
         "title": "Australia & New Zealand",
@@ -4119,6 +4265,15 @@ def self_test():
     }
     assert real_vacancy_reject_reason(ats_bucket_job, cfg)
     assert normalize_job(dict(ats_bucket_job), cfg) is None
+    assert meta_record_vacancy_reject_reason({
+        "Job Title": "Australia & New Zealand",
+        "Company": "AECOM",
+        "Full Description": ats_bucket_job["description"],
+        "Source URL": ats_bucket_job["source_url"],
+        "Apply URL": ats_bucket_job["apply_url"],
+        "Status": "Active",
+        "Application Status": "Open",
+    }, cfg)
 
     real_job = {
         "title": "Senior Interior Designer",
@@ -4135,7 +4290,7 @@ def self_test():
     }
     assert not real_vacancy_reject_reason(real_job, cfg)
 
-    print("SELF TEST PASSED: V4.4.4 validation, blank external_id, real-vacancy lock, LinkedIn signal-only resolution and 500px logo rules are working.")
+    print("SELF TEST PASSED: V4.4.5 validation, hard cleanup, blank external_id, real-vacancy lock, LinkedIn signal-only resolution and 500px logo rules are working.")
 
 
 def main():
@@ -4166,7 +4321,7 @@ def main():
             print(f"SOURCES WARNING | could not update source health | {e}")
 
     print("=" * 80)
-    print(f"V4.4.4 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.4.5 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)
