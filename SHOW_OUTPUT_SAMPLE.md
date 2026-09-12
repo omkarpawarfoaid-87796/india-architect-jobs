@@ -1,15 +1,19 @@
-# V5 Show Output Sample
+# V6 Show Output
 
-After running Candidate Job Pipeline V5, show these tabs:
+Only show the web developer this tab:
 
-1. AutomationOutput
-2. CandidateJobs
-3. RejectedJobs
-4. Sheet1
+`Sheet1`
 
-Expected V5 story:
+Do not use other tabs for website output.
 
-- Sheet1 remains clean and verified.
-- CandidateJobs shows volume.
-- RejectedJobs proves fake rows are filtered.
-- LinkedIn is used only as a signal, never as website apply_url.
+If old tabs from V5 are still visible, they are historical tabs from previous versions. V6 does not need them.
+You can delete or hide them after confirming Sheet1 is correct.
+
+Expected clean output:
+
+- external_id blank
+- no LinkedIn final apply URLs
+- no HomeLane service/city pages
+- no AECOM region bucket pages
+- only publish rows
+- only India-based architecture/design/BIM/visualization jobs

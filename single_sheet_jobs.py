@@ -1,0 +1,623 @@
+"""
+Single Sheet Job Finder V6
+
+Goal:
+- One Google Sheet output only: Sheet1
+- No CandidateJobs, RejectedJobs, Sources, AutomationOutput, or _CollectorMeta required
+- Search wider, but publish only verified website-ready jobs
+- LinkedIn/job boards are signals only; final apply URL is never LinkedIn/login-gated
+
+This script uses collector.py as a parsing/validation library, but it does NOT call
+collector.write_sheet() and does NOT use the old meta/source/report tabs.
+"""
+
+import argparse
+import hashlib
+import html
+import json
+import os
+import re
+import time
+from datetime import date, timedelta
+from urllib.parse import quote, urljoin, urlparse, parse_qs, unquote
+import xml.etree.ElementTree as ET
+
+import requests
+import yaml
+from bs4 import BeautifulSoup
+
+import collector as core
+
+VERSION = "V6"
+ONE_SHEET_TAB = "Sheet1"
+
+# Final website schema. Do not add or remove columns without developer approval.
+WEBSITE_HEADERS = core.WEBSITE_HEADERS
+
+SIGNAL_ONLY_DOMAINS = {
+    "linkedin.com", "www.linkedin.com",
+    "indeed.com", "in.indeed.com", "www.indeed.com",
+    "naukri.com", "www.naukri.com",
+    "foundit.in", "www.foundit.in",
+    "glassdoor.com", "glassdoor.co.in", "www.glassdoor.co.in",
+    "shine.com", "www.shine.com",
+    "timesjobs.com", "www.timesjobs.com",
+    "hirist.tech", "www.hirist.tech",
+    "internshala.com", "www.internshala.com",
+}
+
+CONTENT_OR_DIRECTORY_DOMAINS = {
+    "archdaily.com", "www.archdaily.com",
+    "architecturelab.net", "www.architecturelab.net",
+    "aia.org", "www.aia.org",
+    "houzz.com", "www.houzz.com",
+    "yellowpages.com", "www.yellowpages.com",
+    "superpages.com", "www.superpages.com",
+    "interiordesign.net", "www.interiordesign.net",
+    "decorilla.com", "www.decorilla.com",
+    "dezeen.com", "www.dezeen.com",
+    "designboom.com", "www.designboom.com",
+    "architizer.com", "www.architizer.com",
+    "web.archive.org", "archive.org",
+}
+
+FINAL_BLOCKED_DOMAINS = SIGNAL_ONLY_DOMAINS | CONTENT_OR_DIRECTORY_DOMAINS
+
+ROLE_KEYWORDS = (
+    "architect", "architecture", "architectural", "interior designer",
+    "interior architect", "urban designer", "urban planner", "landscape architect",
+    "bim", "revit", "visualizer", "visualiser", "3d render", "3d artist",
+    "draftsman", "draughtsman", "autocad", "site architect", "design manager",
+)
+
+SOFTWARE_EXCLUDES = (
+    "software architect", "solution architect", "solutions architect", "cloud architect",
+    "enterprise architect", "data architect", "security architect", "network architect",
+    "technical architect", "platform architect", "aws architect", "azure architect",
+    "java architect", ".net architect", "salesforce architect",
+)
+
+SERVICE_PAGE_PREFIXES = (
+    "interior designers in ", "best interior designers in ",
+    "home interior designers in ", "modular kitchen designs in ",
+    "wardrobe designs in ", "bedroom designs in ", "living room designs in ",
+)
+
+GENERIC_BUCKET_TITLES = {
+    "australia & new zealand", "early careers", "graduate careers",
+    "india early careers", "students and graduates", "career areas",
+    "search jobs", "job search", "careers", "current openings", "open positions",
+}
+
+SERVICE_TEXT_MARKERS = (
+    "get free estimate", "design gallery", "store locator", "45-day delivery",
+    "45 day delivery", "10-year warranty", "10 year warranty", "easy emis",
+    "home interior cost", "modular kitchen cost", "book free design session",
+    "experience centre", "visit our experience centre", "own a homelane franchise",
+)
+
+
+def clean(value):
+    return core.clean_text(value or "")
+
+
+def norm_url(url):
+    return core.canonical_url(url or "")
+
+
+def host(url):
+    return core.domain(url or "")
+
+
+def now_ist_date():
+    return core.now_ist().date()
+
+
+def ddmmyyyy(d):
+    if isinstance(d, date):
+        return d.strftime("%d-%m-%Y")
+    parsed = core.parse_date(d)
+    return parsed.strftime("%d-%m-%Y") if parsed else ""
+
+
+def is_signal_only_url(url):
+    d = host(url)
+    return any(d == x or d.endswith("." + x) for x in SIGNAL_ONLY_DOMAINS)
+
+
+def is_blocked_final_url(url, cfg=None):
+    d = host(url)
+    if not d:
+        return True
+    for x in FINAL_BLOCKED_DOMAINS:
+        if d == x or d.endswith("." + x):
+            return True
+    if cfg and core.is_blocked_domain(url, cfg):
+        return True
+    if any(x in url.lower() for x in ("/login", "/signin", "/sign-in", "account/login")):
+        return True
+    return False
+
+
+def hard_reject_reason(title="", description="", url="", employer=""):
+    title_l = clean(title).lower()
+    desc_l = clean(description).lower()
+    url_l = clean(url).lower()
+    employer_l = clean(employer).lower()
+
+    if any(title_l.startswith(prefix) for prefix in SERVICE_PAGE_PREFIXES):
+        return "Service/location landing page, not a job vacancy"
+    if title_l in GENERIC_BUCKET_TITLES:
+        return "Generic career/search bucket page, not a specific vacancy"
+    if "australia & new zealand" in title_l or "anz---early-careers" in url_l:
+        return "Region/career bucket page, not an India job vacancy"
+
+    service_hits = sum(1 for x in SERVICE_TEXT_MARKERS if x in title_l or x in desc_l or x in url_l)
+    if service_hits >= 2:
+        return "Marketing/service landing page, not a vacancy"
+    if "homelane" in employer_l or "homelane.com" in url_l:
+        if service_hits >= 1 or "/interior-designers" in url_l or "/modular-kitchen" in url_l or "/wardrobe" in url_l:
+            return "HomeLane service page, not a vacancy"
+
+    text = f"{title_l} {desc_l}"
+    if any(x in text for x in SOFTWARE_EXCLUDES):
+        return "Software/IT architect role, not built-environment"
+    return ""
+
+
+def role_relevant(title, description=""):
+    text = f"{clean(title)} {clean(description)}".lower()
+    if any(x in text for x in SOFTWARE_EXCLUDES):
+        return False
+    return any(x in text for x in ROLE_KEYWORDS)
+
+
+def has_india_location(text):
+    text_l = clean(text).lower()
+    return any(x in text_l for x in core.load_config().get("india_markers", [])) or "india" in text_l
+
+
+def public_apply_ok(record):
+    apply_type = clean(record.get("apply_type")).lower()
+    apply_url = norm_url(record.get("apply_url"))
+    apply_email = clean(record.get("apply_email") or record.get("employer_email"))
+
+    if apply_email and "@" in apply_email:
+        return True
+    if apply_type == "email" and apply_email:
+        return True
+    if apply_url and not is_blocked_final_url(apply_url):
+        return True
+    return False
+
+
+def web_key(record):
+    parts = [
+        clean(record.get("title")).lower(),
+        clean(record.get("employer_name")).lower(),
+        clean(record.get("location")).lower(),
+        norm_url(record.get("apply_url")).lower(),
+        clean(record.get("apply_email")).lower(),
+    ]
+    raw = "|".join(parts)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def website_record_valid(record, cfg):
+    if clean(record.get("status")).lower() != "publish":
+        return False, "Not publish status"
+    if clean(record.get("filled")).lower() == "yes":
+        return False, "Filled job"
+    title = clean(record.get("title"))
+    description = clean(record.get("description"))
+    employer = clean(record.get("employer_name"))
+    url = clean(record.get("apply_url"))
+    reason = hard_reject_reason(title, description, url, employer)
+    if reason:
+        return False, reason
+    if not role_relevant(title, description):
+        return False, "Role not relevant"
+    location_text = " ".join([
+        clean(record.get("address")), clean(record.get("location")), description, employer
+    ])
+    if not has_india_location(location_text):
+        return False, "Not India-based"
+    expiry = core.parse_date(record.get("expiry_date"))
+    if expiry and expiry < now_ist_date():
+        return False, "Expired"
+    if not public_apply_ok(record):
+        return False, "No public official apply method"
+    if url and is_signal_only_url(url):
+        return False, "Final apply URL is signal-only job board"
+    return True, "OK"
+
+
+def normalize_existing_row(record, cfg):
+    # Ensure every output row has exactly the web schema and external_id stays blank.
+    out = {h: clean(record.get(h, "")) for h in WEBSITE_HEADERS}
+    out["external_id"] = ""
+    if not out.get("expiry_date"):
+        out["expiry_date"] = ddmmyyyy(now_ist_date() + timedelta(days=int(cfg.get("website_rolling_expiry_days", 7))))
+    return out
+
+
+def website_record_from_job(job, cfg):
+    # Reuse the validated V4 mapper, but do not write meta/source tabs.
+    internal = core.job_to_record(job)
+    web = core.website_record_from_meta(internal, cfg)
+    web["external_id"] = ""
+
+    # Safety: never publish LinkedIn/job-board final URLs.
+    if is_signal_only_url(web.get("apply_url")):
+        return None, "Signal-only apply URL"
+    valid, reason = website_record_valid(web, cfg)
+    if not valid:
+        return None, reason
+    return web, "OK"
+
+
+def read_sheet1(service, sheet_id, tab):
+    values = core.read_sheet_values(service, sheet_id, tab)
+    if not values:
+        return []
+    headers = values[0]
+    return [core.row_to_record(headers, row) for row in values[1:]]
+
+
+def ensure_sheet1(service, sheet_id, tab):
+    core.get_sheet_properties(service, sheet_id, tab, create_if_missing=True)
+    core.ensure_sheet_columns(service, sheet_id, tab, len(WEBSITE_HEADERS))
+
+
+def write_sheet1_only(service, sheet_id, tab, records):
+    ensure_sheet1(service, sheet_id, tab)
+    end_col = core.column_letter(len(WEBSITE_HEADERS))
+    service.spreadsheets().values().clear(
+        spreadsheetId=sheet_id,
+        range=f"'{tab}'!A:ZZ",
+        body={},
+    ).execute()
+    values = [WEBSITE_HEADERS]
+    for rec in records:
+        rec = {h: rec.get(h, "") for h in WEBSITE_HEADERS}
+        rec["external_id"] = ""
+        values.append([rec.get(h, "") for h in WEBSITE_HEADERS])
+    service.spreadsheets().values().update(
+        spreadsheetId=sheet_id,
+        range=f"'{tab}'!A1:{end_col}{len(values)}",
+        valueInputOption="RAW",
+        body={"values": values},
+    ).execute()
+
+
+def delete_old_pipeline_tabs(service, sheet_id, cfg):
+    if not bool(cfg.get("delete_old_pipeline_tabs", False)):
+        return 0
+    targets = set(cfg.get("old_pipeline_tabs_to_delete", []))
+    if not targets:
+        targets = {"CandidateJobs", "RejectedJobs", "AutomationOutput", "Sources", "_CollectorMeta"}
+    try:
+        metadata = service.spreadsheets().get(
+            spreadsheetId=sheet_id,
+            fields="sheets(properties(sheetId,title))",
+        ).execute()
+        requests = []
+        for sheet in metadata.get("sheets", []):
+            props = sheet.get("properties", {})
+            title = props.get("title")
+            sid = props.get("sheetId")
+            if title in targets and title != ONE_SHEET_TAB:
+                requests.append({"deleteSheet": {"sheetId": sid}})
+        if requests:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"requests": requests},
+            ).execute()
+        return len(requests)
+    except Exception as e:
+        print(f"V6 WARNING | could not delete old extra tabs safely: {e}")
+        return 0
+
+
+def fetch_url(url, cfg):
+    try:
+        r = requests.get(
+            url,
+            timeout=int(cfg.get("request_timeout_seconds", 10)),
+            headers={"User-Agent": core.USER_AGENT},
+            allow_redirects=True,
+        )
+        if r.status_code >= 400:
+            return None
+        return r
+    except Exception:
+        return None
+
+
+def bing_rss(query, cfg):
+    url = "https://www.bing.com/search?q=" + quote(query) + "&format=rss"
+    r = fetch_url(url, cfg)
+    if not r:
+        return []
+    out = []
+    try:
+        root = ET.fromstring(r.text)
+    except Exception:
+        return []
+    for item in root.findall(".//item"):
+        title = clean(item.findtext("title"))
+        link = clean(item.findtext("link"))
+        desc = clean(item.findtext("description"))
+        if link:
+            out.append({"title": title, "url": norm_url(link), "snippet": desc, "query": query})
+        if len(out) >= int(cfg.get("v6_results_per_query", 8)):
+            break
+    return out
+
+
+def career_like_url(url):
+    u = (url or "").lower()
+    return any(x in u for x in ("career", "careers", "jobs", "job", "openings", "hiring", "join-us", "joinus", "vacancy"))
+
+
+def extract_company_from_signal(title, snippet=""):
+    text = clean(title)
+    # Common patterns: "Junior Architect - ABC - LinkedIn", "ABC hiring Junior Architect"
+    parts = [p.strip() for p in re.split(r"\s[-|–—]\s", text) if p.strip()]
+    bad = {"linkedin", "jobs", "job", "naukri", "indeed", "glassdoor"}
+    for p in reversed(parts):
+        p_clean = re.sub(r"\b(India|LinkedIn|Naukri|Indeed|Jobs?)\b", "", p, flags=re.I).strip()
+        if p_clean and p_clean.lower() not in bad and len(p_clean) >= 3:
+            return p_clean[:80]
+    m = re.search(r"at\s+([A-Z][A-Za-z0-9&.,' ]{2,80})", text)
+    if m:
+        return clean(m.group(1))
+    return ""
+
+
+def official_sources_from_signal(result, cfg):
+    company = extract_company_from_signal(result.get("title"), result.get("snippet"))
+    if not company:
+        return []
+    queries = [
+        f'"{company}" careers India architect',
+        f'"{company}" "current openings" India architect',
+        f'"{company}" "join our team" India architecture',
+    ]
+    urls = []
+    seen = set()
+    for q in queries[: int(cfg.get("v6_signal_resolve_queries", 2))]:
+        for hit in bing_rss(q, cfg):
+            u = norm_url(hit.get("url"))
+            if not u or u in seen:
+                continue
+            if is_blocked_final_url(u, cfg):
+                continue
+            if not career_like_url(u):
+                continue
+            seen.add(u)
+            urls.append(u)
+            if len(urls) >= int(cfg.get("v6_official_sources_per_signal", 2)):
+                return urls
+    return urls
+
+
+def discover_run_sources(cfg):
+    sources = []
+    seen = set()
+
+    for u in cfg.get("career_pages", []):
+        u = norm_url(u)
+        if u and u not in seen and not is_blocked_final_url(u, cfg):
+            seen.add(u)
+            sources.append(u)
+
+    queries = cfg.get("v6_search_queries", [])
+    max_queries = int(cfg.get("v6_max_queries_per_run", 18))
+    max_sources = int(cfg.get("v6_max_discovered_sources_per_run", 25))
+
+    for query in queries[:max_queries]:
+        print(f"V6 SEARCH | {query}")
+        for hit in bing_rss(query, cfg):
+            u = norm_url(hit.get("url"))
+            if not u:
+                continue
+
+            if is_signal_only_url(u):
+                # LinkedIn/job board signal only. Resolve to official sources.
+                for official in official_sources_from_signal(hit, cfg):
+                    if official not in seen and not is_blocked_final_url(official, cfg):
+                        seen.add(official)
+                        sources.append(official)
+                        print(f"V6 SIGNAL RESOLVED | {hit.get('title')} -> {official}")
+                continue
+
+            if is_blocked_final_url(u, cfg):
+                continue
+            if career_like_url(u):
+                if u not in seen:
+                    seen.add(u)
+                    sources.append(u)
+                    print(f"V6 SOURCE | {u}")
+
+            if len(sources) >= len(cfg.get("career_pages", [])) + max_sources:
+                break
+        if len(sources) >= len(cfg.get("career_pages", [])) + max_sources:
+            break
+        time.sleep(float(cfg.get("v6_search_delay_seconds", 0.4)))
+
+    return sources
+
+
+def jobs_from_sources(sources, cfg):
+    cfg2 = dict(cfg)
+    cfg2["career_pages"] = sources
+    cfg2["max_sources_per_run"] = int(cfg.get("v6_max_sources_to_scan", len(sources)))
+    cfg2["source_workers"] = int(cfg.get("source_workers", 4))
+    cfg2["max_job_links_per_source"] = int(cfg.get("max_job_links_per_source", 8))
+    cfg2["max_pages_per_source"] = int(cfg.get("max_pages_per_source", 8))
+    jobs, reports = core.scan_all_sources(cfg2)
+    return jobs, reports
+
+
+def build_single_sheet_records(existing_records, jobs, cfg):
+    accepted = []
+    rejected_count = 0
+    existing_kept = 0
+    new_added = 0
+    by_key = {}
+
+    for rec in existing_records:
+        web = normalize_existing_row(rec, cfg)
+        valid, reason = website_record_valid(web, cfg)
+        if not valid:
+            rejected_count += 1
+            print(f"V6 CLEAN EXISTING | removed | {web.get('employer_name')} | {web.get('title')} | {reason}")
+            continue
+        key = web_key(web)
+        by_key[key] = web
+        existing_kept += 1
+
+    for job in jobs:
+        web, reason = website_record_from_job(job, cfg)
+        if not web:
+            rejected_count += 1
+            print(f"V6 REJECT JOB | {job.get('company')} | {job.get('title')} | {reason}")
+            continue
+        key = web_key(web)
+        if key not in by_key:
+            new_added += 1
+        by_key[key] = web
+
+    accepted = list(by_key.values())
+    accepted.sort(key=lambda r: (clean(r.get("employer_name")).lower(), clean(r.get("title")).lower()))
+    return accepted, {"existing_kept": existing_kept, "new_added": new_added, "rejected_count": rejected_count}
+
+
+def load_config():
+    with open("config.yaml", "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    cfg.setdefault("minimum_posted_date", "2026-09-01")
+    cfg.setdefault("website_rolling_expiry_days", 7)
+    cfg.setdefault("request_timeout_seconds", 10)
+    cfg.setdefault("source_workers", 4)
+    cfg.setdefault("max_job_links_per_source", 8)
+    cfg.setdefault("max_pages_per_source", 8)
+    return cfg
+
+
+def run(dry_run=False):
+    cfg = load_config()
+    sources = discover_run_sources(cfg)
+    print("=" * 80)
+    print(f"V6 sources to scan this run: {len(sources)}")
+    print("=" * 80)
+
+    jobs, reports = jobs_from_sources(sources, cfg)
+    print("=" * 80)
+    print(f"V6 parsed/validated jobs before Sheet1 merge: {len(jobs)}")
+    print("=" * 80)
+
+    if dry_run:
+        for j in jobs[:20]:
+            print(json.dumps({"title": j.get("title"), "company": j.get("company"), "apply_url": j.get("apply_url")}, ensure_ascii=False))
+        return
+
+    sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
+    if not sheet_id:
+        raise RuntimeError("Missing GOOGLE_SHEET_ID")
+    tab = os.environ.get("GOOGLE_SHEET_TAB", ONE_SHEET_TAB) or ONE_SHEET_TAB
+    if tab != ONE_SHEET_TAB:
+        print(f"V6 NOTICE | forcing single output tab from {tab!r} to {ONE_SHEET_TAB!r}")
+        tab = ONE_SHEET_TAB
+
+    service = core.sheet_service()
+    ensure_sheet1(service, sheet_id, tab)
+    existing = read_sheet1(service, sheet_id, tab)
+    records, stats = build_single_sheet_records(existing, jobs, cfg)
+    write_sheet1_only(service, sheet_id, tab, records)
+    deleted = delete_old_pipeline_tabs(service, sheet_id, cfg)
+
+    print("=" * 80)
+    print("V6 SINGLE SHEET COMPLETE")
+    print(f"Sheet tab: {tab}")
+    print(f"Existing kept: {stats['existing_kept']}")
+    print(f"New/updated accepted jobs: {stats['new_added']}")
+    print(f"Rejected/cleaned rows this run: {stats['rejected_count']}")
+    print(f"Final Sheet1 website-ready jobs: {len(records)}")
+    print(f"Old extra tabs deleted: {deleted}")
+    print("=" * 80)
+
+
+def self_test():
+    cfg = {
+        "website_rolling_expiry_days": 7,
+        "india_markers": ["india", "mumbai", "delhi"],
+    }
+    bad = {
+        "external_id": "ABC",
+        "title": "Interior Designers in Ahmedabad",
+        "description": "Get Free Estimate Design Gallery Store Locator 45-day delivery",
+        "status": "publish",
+        "filled": "no",
+        "employer_name": "HomeLane",
+        "apply_type": "external",
+        "apply_url": "https://www.homelane.com/interior-designers/ahmedabad",
+        "apply_email": "",
+        "address": "Ahmedabad, India",
+        "location": "Ahmedabad|India",
+    }
+    ok, reason = website_record_valid(bad, cfg)
+    assert not ok and "service" in reason.lower()
+
+    linkedin = dict(bad)
+    linkedin.update({
+        "title": "Junior Architect",
+        "description": "We are hiring a Junior Architect in Mumbai India. Send resume.",
+        "employer_name": "ABC Architects",
+        "apply_url": "https://www.linkedin.com/jobs/view/123",
+    })
+    ok, reason = website_record_valid(linkedin, cfg)
+    assert not ok
+
+    good = dict(bad)
+    good.update({
+        "external_id": "SHOULD_CLEAR",
+        "title": "Junior Architect",
+        "description": "We are hiring a Junior Architect in Mumbai India. Experience 1-3 years. Apply now.",
+        "employer_name": "ABC Architects",
+        "employer_email": "careers@example.com",
+        "apply_type": "email",
+        "apply_url": "",
+        "apply_email": "careers@example.com",
+        "address": "Mumbai, Maharashtra, India",
+        "location": "Mumbai|India",
+        "category": "Architecture",
+        "expiry_date": ddmmyyyy(now_ist_date() + timedelta(days=7)),
+    })
+    ok, reason = website_record_valid(good, cfg)
+    assert ok, reason
+    normalized = normalize_existing_row(good, cfg)
+    assert normalized["external_id"] == ""
+
+    rows, stats = build_single_sheet_records([bad, good, good], [], cfg)
+    assert len(rows) == 1
+    assert rows[0]["external_id"] == ""
+    assert stats["rejected_count"] == 1
+
+    print("V6 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, LinkedIn signal-only rule, dedupe and blank external_id are working.")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    if args.self_test:
+        self_test()
+        return
+    run(dry_run=args.dry_run)
+
+
+if __name__ == "__main__":
+    main()

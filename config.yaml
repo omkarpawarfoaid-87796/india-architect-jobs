@@ -1,4 +1,4 @@
-# Architect Jobs Collector V5 — ATS Coverage + Showable Output Report
+# Architect Jobs Collector V6 — Single Sheet Only
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -210,10 +210,10 @@ career_pages:
   - "https://www.designhaaus.com/careers"
 
 max_sitemap_pages_per_source: 20
-max_job_links_per_source: 30
-request_timeout_seconds: 15
+max_job_links_per_source: 8
+request_timeout_seconds: 10
 request_delay_seconds: 0.15
-source_workers: 6
+source_workers: 4
 revalidate_limit_per_run: 250
 
 
@@ -385,7 +385,7 @@ smartrecruiters_detail_limit: 40
 
 
 # -------------------------------------------------------------------
-# V5 stronger platform/CDN blocking
+# V4.4.6 stronger platform/CDN blocking
 # -------------------------------------------------------------------
 platform_blocked_domains:
   - architectandinteriorsindia.com
@@ -441,7 +441,7 @@ ats_search_patterns:
 report_tab: AutomationOutput
 
 
-# V5 fresh-job volume controls
+# V4.4.6 fresh-job volume controls
 # Fresh discovery now tries direct official job pages as sources, but only when
 # the page has hiring/apply/career signals and passes the normal job validator.
 direct_job_page_min_hiring_terms: 1
@@ -449,16 +449,16 @@ fresh_direct_job_pages_enabled: true
 
 
 # -------------------------------------------------------------------
-# V5 hard cleanup
+# V4.4.6 hard cleanup
 # -------------------------------------------------------------------
 v445_hard_cleanup_enabled: true
 service_page_noise_reject_score: 5
 
 
 # -------------------------------------------------------------------
-# V5 timeout-safe cleanup overrides
+# V4.4.6 timeout-safe cleanup overrides
 # -------------------------------------------------------------------
-request_timeout_seconds: 8
+request_timeout_seconds: 10
 request_delay_seconds: 0.05
 source_workers: 4
 hourly_source_batch_size: 30
@@ -472,18 +472,49 @@ service_page_noise_reject_score: 6
 
 
 # -------------------------------------------------------------------
-# V5 CandidateJobs pipeline
+# V6 Single Sheet Only
 # -------------------------------------------------------------------
-candidate_jobs_tab: CandidateJobs
-rejected_jobs_tab: RejectedJobs
-candidate_roles_per_run: 8
-candidate_cities_per_run: 5
-candidate_max_queries_per_run: 40
-candidate_max_candidates_per_run: 100
-candidate_max_rejected_per_run: 120
-candidate_request_delay_seconds: 0.6
+v6_single_sheet_only: true
+sheet_tab: Sheet1
 
-# V5 keeps LinkedIn/job boards as signals only.
-# They are never written as final apply_url in Sheet1.
-candidate_use_linkedin_signals: true
-candidate_use_job_board_signals: true
+# V6 will not create or use CandidateJobs, RejectedJobs, Sources,
+# AutomationOutput, or _CollectorMeta. Set this true if you want V6 to delete
+# old tabs created by earlier versions after a successful Sheet1 write.
+delete_old_pipeline_tabs: false
+old_pipeline_tabs_to_delete:
+  - CandidateJobs
+  - RejectedJobs
+  - AutomationOutput
+  - Sources
+  - _CollectorMeta
+
+# Search wider but publish only real verified jobs to Sheet1.
+v6_max_queries_per_run: 20
+v6_results_per_query: 8
+v6_max_discovered_sources_per_run: 30
+v6_signal_resolve_queries: 2
+v6_official_sources_per_signal: 2
+v6_max_sources_to_scan: 45
+v6_search_delay_seconds: 0.4
+
+v6_search_queries:
+  - 'site:linkedin.com/jobs "Junior Architect" India posted'
+  - 'site:linkedin.com/jobs "Senior Architect" India posted'
+  - 'site:linkedin.com/jobs "Interior Designer" India posted'
+  - 'site:linkedin.com/jobs "BIM Architect" India posted'
+  - 'site:linkedin.com/jobs "3D Visualizer" India posted'
+  - '"Junior Architect" "apply" "India" "careers"'
+  - '"Senior Architect" "apply" "India" "careers"'
+  - '"Interior Designer" "apply" "India" "careers"'
+  - '"BIM Coordinator" "apply" "India" "careers"'
+  - '"Revit Architect" "apply" "India" "careers"'
+  - '"Architectural Designer" "apply" "India" "careers"'
+  - '"3D Visualizer" "apply" "India" "careers"'
+  - '"architect" "send your resume" "Mumbai"'
+  - '"architect" "send your cv" "Delhi"'
+  - '"interior designer" "send your resume" "Bengaluru"'
+  - '"architecture" "current openings" "Pune"'
+  - '"BIM" "current openings" "Hyderabad"'
+  - '"urban designer" "current openings" India'
+  - '"landscape architect" "current openings" India'
+  - '"architectural draftsman" "current openings" India'

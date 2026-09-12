@@ -1,68 +1,72 @@
-# India Architect Jobs Automation V5
+# India Architect Jobs Collector V6 — Single Sheet Only
 
-V5 changes the strategy from “force everything into Sheet1” to a professional two-layer pipeline.
+V6 follows the new requirement: output only to `Sheet1`.
 
-## Main idea
+## What changed from V5
 
-- `Sheet1` = only verified website-ready jobs.
-- `CandidateJobs` = high-volume job signals from LinkedIn/search/job boards/official pages for review.
-- `RejectedJobs` = fake, content, service-page, expired or invalid signals.
-- `AutomationOutput` = stakeholder dashboard summary.
+V5 created multiple tabs: CandidateJobs, RejectedJobs, AutomationOutput, Sources, and _CollectorMeta.
+V6 does not use those tabs.
 
-## Why V5 is needed
+The website developer should connect only to:
 
-V4.4.6 is stable and clean, but strict verification keeps Sheet1 around 4–7 jobs. V5 keeps Sheet1 clean while creating a larger visible candidate pipeline.
+`Sheet1`
 
-## New file
+## V6 flow
 
-- `candidate_jobs.py`
+1. Read existing `Sheet1`.
+2. Remove fake, expired, duplicate, LinkedIn-final, and service-page rows.
+3. Search multiple public sources:
+   - company career pages
+   - official employer websites
+   - public ATS boards
+   - Bing/Google-style public search signals
+   - LinkedIn/job-board signals as discovery signals only
+4. Resolve LinkedIn/job-board signals to official employer pages where possible.
+5. Validate public apply method.
+6. Rebuild only `Sheet1` with website-ready jobs.
 
-## New Google Sheet tabs
+## Important LinkedIn rule
 
-- `CandidateJobs`
-- `RejectedJobs`
+LinkedIn can be used only to discover that a company has a job.
+The final `apply_url` in Sheet1 will never be a LinkedIn URL.
 
-## LinkedIn rule
+Allowed final apply methods:
 
-LinkedIn is used only as a company-listed search signal. The website never sends users to LinkedIn.
+- official company careers page
+- official job page
+- public ATS apply page
+- official application form
+- employer email
 
-LinkedIn signal flow:
+## Sheet1 schema
 
-1. Read public search result metadata only.
-2. Extract role and company.
-3. Try to resolve official company careers/apply page.
-4. Save into CandidateJobs.
-5. Only official/non-LinkedIn sources can become final website jobs.
+V6 uses the exact developer schema:
 
-## Workflows
+external_id, title, description, status, employer_author, employer_email,
+employer_name, expiry_date, application_deadline_date, featured, urgent,
+filled, apply_type, apply_url, apply_email, phone, salary, max_salary,
+salary_type, address, location, category, type, tag, experience, gender,
+industry, qualification, career_level, video_url, logo_url
 
-1. `Hourly Architect Job Collector V5`
-   - Updates only verified Sheet1.
-2. `Fresh Architect Job Discovery V5`
-   - Builds CandidateJobs, fresh sources, ATS sources, then refreshes Sheet1.
-3. `Daily Architect Source Discovery V5`
-   - Finds new official career sources.
-4. `Candidate Job Pipeline V5`
-   - Builds only CandidateJobs and RejectedJobs.
+`external_id` always remains blank.
 
-## First run order
+## Important repo cleanup
 
-1. Candidate Job Pipeline V5
-2. Fresh Architect Job Discovery V5
-3. Hourly Architect Job Collector V5
+Before pushing V6, remove old workflow files from earlier versions:
 
-## What to show
+- .github/workflows/hourly.yml
+- .github/workflows/discovery.yml
+- .github/workflows/fresh_jobs.yml
+- .github/workflows/candidate_jobs.yml
 
-Open `AutomationOutput` and show:
+Then add only:
 
-- Website-ready open jobs
-- CandidateJobs total
-- Pending review
-- Official source found
-- LinkedIn company-listed signals
-- RejectedJobs total
-- Rejected reason summary
+- .github/workflows/single_sheet_jobs.yml
 
-## Important
+## Run order
 
-Do not connect CandidateJobs directly to the website. Your web developer should import only Sheet1.
+Run only one workflow:
+
+`Single Sheet Job Finder V6`
+
+It runs hourly on schedule and can also be run manually.
