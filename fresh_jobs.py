@@ -1,12 +1,14 @@
 """
-V4.4.3 Fresh Job Discovery
+V4.4.4 Fresh Job Discovery
 
 Purpose:
 - Find newly surfaced architecture / built-environment job signals every few hours.
 - Search public web results, including search-result snippets that may point to
   LinkedIn or job boards.
+- LinkedIn job results are allowed only as company-listed search signals.
 - NEVER fetch/login to LinkedIn and NEVER publish a LinkedIn-only job.
 - Resolve the employer to an official/public company careers/job page first.
+- Final apply_url must be official company/ATS/email, never LinkedIn.
 - Add verified public career sources into Sources.
 - The workflow then runs collector.py immediately, so valid jobs can reach
   Sheet1 without waiting for the next hourly schedule.
@@ -31,6 +33,30 @@ def load_config():
 
 def compact(value):
     return core.clean_text(value or "")
+
+
+def is_linkedin_url(url):
+    d = core.domain(url)
+    return d == "linkedin.com" or d.endswith(".linkedin.com")
+
+
+def is_company_listed_linkedin_signal(signal):
+    """
+    V4.4.4: LinkedIn can be used only as a public search-result signal when
+    the search result itself exposes the employer/company name. We never fetch
+    LinkedIn and never output LinkedIn as apply_url.
+    """
+    return (
+        is_linkedin_url(signal.get("signal_url", ""))
+        and bool(core.clean_text(signal.get("company")))
+        and bool(core.clean_text(signal.get("role")))
+    )
+
+
+def signal_origin_label(signal):
+    if is_company_listed_linkedin_signal(signal):
+        return "LinkedIn company-listed signal only; final apply is official/non-LinkedIn"
+    return f"{signal.get('engine','Search')} fresh signal"
 
 
 def blocked_signal_domain(url):
@@ -233,6 +259,12 @@ def fresh_queries(cfg):
         queries.append(f'"{role}" "current openings" India')
         queries.append(f'"{role}" "send your resume" India')
 
+        if cfg.get("fresh_use_linkedin_company_signals", True):
+            # LinkedIn is used only as a search-result signal. We do not fetch
+            # LinkedIn and never send the website visitor to LinkedIn.
+            queries.append(f'site:linkedin.com/jobs "{role}" India "hiring"')
+            queries.append(f'site:linkedin.com/jobs "{role}" India "posted"')
+
         # City-specific queries increase precision.
         for city in selected_cities:
             queries.append(f'"{role}" {city} India hiring')
@@ -257,14 +289,23 @@ def result_to_signal(result, cfg):
         role,
     )
 
+    signal_url = core.canonical_url(result.get("url") or "")
+
+    # V4.4.4: LinkedIn is allowed only when the public search-result metadata
+    # gives a company/employer. Otherwise we cannot safely resolve it to the
+    # official employer page.
+    if is_linkedin_url(signal_url) and not company:
+        return None
+
     return {
         "role": role,
         "company": company,
-        "signal_url": core.canonical_url(result.get("url") or ""),
+        "signal_url": signal_url,
         "signal_title": compact(result.get("title")),
         "signal_snippet": compact(result.get("snippet")),
         "engine": compact(result.get("engine")),
         "recent_hint": signal_is_recent(text),
+        "signal_origin": "LinkedIn Company Signal" if is_linkedin_url(signal_url) else "Web Search Signal",
     }
 
 
@@ -275,8 +316,10 @@ def official_resolution_queries(signal):
 
     if company:
         queries.extend([
-            f'"{company}" "{role}" careers',
-            f'"{company}" "{role}" jobs',
+            f'"{company}" "{role}" careers India',
+            f'"{company}" "{role}" jobs India',
+            f'"{company}" "{role}" "apply" India',
+            f'"{company}" "{role}" "opening" India',
             f'"{company}" careers India',
             f'"{company}" official website careers',
         ])
@@ -286,12 +329,12 @@ def official_resolution_queries(signal):
     if title:
         queries.append(f'"{title}" official careers India')
 
-    return queries[:5]
+    return queries[:8]
 
 
 def fresh_signal_source_reject_reason(url, title="", snippet="", page_text=""):
     """
-    V4.4.3 gate: fresh discovery must focus on hiring pages, not content pages.
+    V4.4.4 gate: fresh discovery must focus on hiring pages, not content pages.
     """
     url = core.canonical_url(url or "")
     if not url:
@@ -329,6 +372,17 @@ def fresh_signal_source_reject_reason(url, title="", snippet="", page_text=""):
     # If the URL path has no hiring terms, require the page/snippet to strongly
     # look like an application page before it can become a source.
     path_hiring = re.search(r"/(careers?|jobs?|openings?|positions?|vacanc(?:y|ies)|join-us|work-with-us|apply|hiring)(/|$|-|_)", path)
+    service_title_job = {
+        "title": title,
+        "description": " ".join([snippet or "", page_text or ""]),
+        "source_url": url,
+    }
+    reason = core.real_vacancy_reject_reason(service_title_job, {})
+    # Only enforce the hard page/title problems here. Real role checks are
+    # handled after full parsing because search titles can be noisy.
+    if reason and any(key in reason.lower() for key in ("service/location", "marketing/service", "region/career")):
+        return reason
+
     if not path_hiring and not any(term in combined for term in hiring_terms):
         return "No hiring/apply/career signal"
 
@@ -337,7 +391,7 @@ def fresh_signal_source_reject_reason(url, title="", snippet="", page_text=""):
 
 def source_from_direct_job_page(result, signal, cfg):
     """
-    V4.4.3 volume improvement: if a public official result is itself a valid
+    V4.4.4 volume improvement: if a public official result is itself a valid
     job page, add that exact page as a source. This lets new jobs enter Sheet1
     without waiting for a separate careers-page resolver.
     """
@@ -357,6 +411,11 @@ def source_from_direct_job_page(result, signal, cfg):
 
     jobs, response = core.parse_page_for_jobs(url, cfg, title_hint=signal.get("role", ""))
     if not response or not jobs:
+        return None
+
+    # Safety: parser may return only service/marketing pages in older sheets;
+    # V4.4.4 job validator already rejects them, but keep this explicit here.
+    if not any(not core.real_vacancy_reject_reason(j, cfg) for j in jobs):
         return None
 
     page_text = " ".join([j.get("description", "") for j in jobs])
@@ -385,7 +444,7 @@ def source_from_direct_job_page(result, signal, cfg):
         "state": state,
         "source_type": "Fresh Direct Job Page",
         "discovered_from": (
-            f"{signal.get('engine','Search')} direct job page | "
+            f"{signal_origin_label(signal)} direct job page | "
             f"{signal.get('role','')} | {signal.get('company','Unknown employer')}"
         ),
         "first_discovered": core.now_ist().isoformat(timespec="seconds"),
@@ -479,7 +538,7 @@ def source_from_official_result(result, signal, cfg):
 
     candidate["source_type"] = "Fresh Job Signal"
     candidate["discovered_from"] = (
-        f"{signal.get('engine','Search')} fresh signal | "
+        f"{signal_origin_label(signal)} | "
         f"{signal['role']} | {signal.get('company','Unknown employer')}"
     )
     candidate["status"] = "New"
@@ -646,6 +705,25 @@ def self_test():
         "Senior Architect",
         "Apply now for this job in Mumbai, India",
         "Apply now Senior Architect Mumbai India",
+    )
+
+    assert is_company_listed_linkedin_signal(linkedin_signal)
+    no_company_linkedin = result_to_signal(
+        {
+            "title": "Junior Architect | LinkedIn",
+            "snippet": "2 hours ago · Easy Apply",
+            "url": "https://www.linkedin.com/jobs/view/999",
+            "engine": "Bing RSS",
+        },
+        cfg,
+    )
+    assert no_company_linkedin is None
+
+    assert fresh_signal_source_reject_reason(
+        "https://www.homelane.com/interior-designers-in-ahmedabad",
+        "Interior Designers in Ahmedabad",
+        "Get Free Estimate Design Gallery Store Locator",
+        "Book Free Design Session Modular Kitchen Cost 45-day delivery 10-year warranty",
     )
 
     print("FRESH JOB DISCOVERY SELF TEST PASSED")
