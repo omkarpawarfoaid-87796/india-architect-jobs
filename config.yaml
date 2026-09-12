@@ -1,4 +1,4 @@
-# Architect Jobs Collector V4.4.2 — ATS Coverage + Showable Output Report
+# Architect Jobs Collector V4.4.3 — ATS Coverage + Showable Output Report
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -178,6 +178,36 @@ career_pages:
   - "https://www.architecturebrio.com/careers/"
   - "https://www.studiolotus.in/careers"
   - "https://www.abindesignstudio.com/career"
+  - "https://www.livspace.com/in/careers"
+  - "https://www.homelane.com/careers"
+  - "https://www.spacewood.in/careers/"
+  - "https://www.godrejproperties.com/careers"
+  - "https://www.lodhagroup.in/careers"
+  - "https://www.piramalrealty.com/careers"
+  - "https://www.kanakia.com/careers"
+  - "https://www.rustomjee.com/careers"
+  - "https://www.puravankara.com/careers/"
+  - "https://www.brigadegroup.com/careers"
+  - "https://www.prestigeconstructions.com/careers"
+  - "https://www.sobha.com/careers/"
+  - "https://www.mahindralifespaces.com/careers/"
+  - "https://www.tataprojects.com/careers/"
+  - "https://www.shapoorjipallonji.com/careers/"
+  - "https://www.gensler.com/careers"
+  - "https://www.aecom.com/careers/"
+  - "https://www.stantec.com/en/careers"
+  - "https://www.rsp.design/careers/"
+  - "https://www.cpka.in/careers"
+  - "https://www.sanjaypuriarchitects.com/careers/"
+  - "https://www.vastushilpa.org/careers/"
+  - "https://www.spasmindia.com/careers"
+  - "https://www.edifice.co.in/careers/"
+  - "https://www.planet3studios.com/careers/"
+  - "https://www.khoslaassociates.com/careers/"
+  - "https://www.malikarchitecture.com/careers/"
+  - "https://www.opolis.in/careers"
+  - "https://www.somayaandkalappa.com/careers/"
+  - "https://www.designhaaus.com/careers"
 
 max_sitemap_pages_per_source: 20
 max_job_links_per_source: 30
@@ -267,6 +297,18 @@ logo_transparent_background: "00FFFFFF"
 # These searches are signals only. A job is never published from LinkedIn or a
 # job board alone; the automation must resolve a public official company source.
 fresh_job_roles:
+  - Senior Interior Designer
+  - Design Manager
+  - Construction Manager
+  - Project Manager Architecture
+  - Civil Site Engineer
+  - Site Engineer Architecture
+  - Interior Stylist
+  - BIM Manager
+  - BIM Coordinator
+  - Revit Architect
+  - Architectural Designer
+  - Design Architect
   - Junior Architect
   - Architect
   - Senior Architect
@@ -302,10 +344,10 @@ fresh_job_cities:
   - Goa
   - Surat
 
-fresh_roles_per_run: 5
-fresh_cities_per_run: 3
-fresh_max_queries_per_run: 24
-fresh_max_new_sources_per_run: 20
+fresh_roles_per_run: 8
+fresh_cities_per_run: 4
+fresh_max_queries_per_run: 60
+fresh_max_new_sources_per_run: 40
 fresh_request_delay_seconds: 0.8
 
 
@@ -343,9 +385,18 @@ smartrecruiters_detail_limit: 40
 
 
 # -------------------------------------------------------------------
-# V4.4.2 stronger platform/CDN blocking
+# V4.4.3 stronger platform/CDN blocking
 # -------------------------------------------------------------------
 platform_blocked_domains:
+  - architectandinteriorsindia.com
+  - stirworld.com
+  - e-architect.com
+  - archinect.com
+  - worldarchitecture.org
+  - architecturelab.net
+  - aia.org
+  - adsttc.com
+  - nrd.adsttc.com
   - web.archive.org
   - archive.org
   - yellowpages.com
@@ -388,3 +439,10 @@ ats_search_patterns:
   - applytojob.com
 
 report_tab: AutomationOutput
+
+
+# V4.4.3 fresh-job volume controls
+# Fresh discovery now tries direct official job pages as sources, but only when
+# the page has hiring/apply/career signals and passes the normal job validator.
+direct_job_page_min_hiring_terms: 1
+fresh_direct_job_pages_enabled: true
