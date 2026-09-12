@@ -1,55 +1,18 @@
-# Architect Job Collector V7 — Apply Link Mode
+# Architect Job Collector V8 — Apply Link Harvester
 
-V7 is built for the user's updated requirement:
+Single Sheet only: `Sheet1`.
 
-- One Google Sheet output only: `Sheet1`
-- Quantity is important
-- Jobs may be discovered from many sources: LinkedIn, Naukri, Indeed, Foundit, Shine, TimesJobs, Glassdoor, Internshala, official career pages, and public web search results
-- Final output must contain a real apply link where possible
-- Only real job-detail URLs are allowed
-- Search pages, dictionary pages, Wikipedia, BIM articles, product pages, service/location pages, directory pages and fake rows are rejected
+V8 is built for quantity with real apply links. It uses multiple public sources:
 
-## Output
+- Official career pages
+- Bing RSS search
+- Bing HTML search
+- DuckDuckGo HTML search
+- Naukri search pages to extract specific job-listing links
+- Indeed search pages to extract specific viewjob links
+- LinkedIn public search pages to extract specific `/jobs/view/` links
+- TimesJobs public pages
 
-The website developer should use only `Sheet1`.
+It still rejects content/reference/product/service pages such as Wikipedia, Dictionary, Autodesk product pages, BIM articles, Architecture Digest, HomeLane city pages, and generic job-search pages.
 
-V7 deletes old pipeline tabs when it runs successfully:
-
-- `_CollectorMeta`
-- `Sources`
-- `CandidateJobs`
-- `AutomationOutput`
-- `RejectedJobs`
-
-## Apply-link policy
-
-Allowed as final `apply_url`:
-
-- Official company career/job pages
-- Public ATS job pages
-- Specific Naukri job-listing pages
-- Specific Indeed viewjob pages
-- Specific Foundit job pages
-- Specific Shine job pages
-- Specific TimesJobs JobDetailView pages
-- Specific Glassdoor job-listing pages
-- Specific LinkedIn `/jobs/view/` pages
-
-Rejected as final `apply_url`:
-
-- LinkedIn search pages
-- Generic job-board search pages
-- Login pages
-- Company pages without job detail
-- Articles/content pages
-- Product pages
-- Dictionary/Wikipedia pages
-- Service/city landing pages
-
-## Workflow
-
-GitHub Actions workflow name:
-
-`Single Sheet Job Finder V7 Apply Link Mode`
-
-Run this workflow manually after uploading the files.
+Final output is only `Sheet1`.

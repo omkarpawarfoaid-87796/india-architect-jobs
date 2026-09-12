@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 
 import collector as core
 
-VERSION = "V7-APPLY-LINK-MODE"
+VERSION = "V8-APPLY-LINK-HARVESTER"
 ONE_SHEET_TAB = "Sheet1"
 
 # Final website schema. Do not add or remove columns without developer approval.
@@ -509,6 +509,242 @@ def bing_rss(query, cfg):
     return out
 
 
+def decode_search_redirect(url):
+    """Decode common search-engine redirect URLs into the final target URL."""
+    u = clean(url)
+    if not u:
+        return ""
+    parsed = urlparse(u)
+    qs = parse_qs(parsed.query)
+    for key in ("u", "url", "uddg", "target", "r"):
+        vals = qs.get(key)
+        if vals:
+            cand = unquote(vals[0])
+            if cand.startswith("http"):
+                return norm_url(cand)
+    return norm_url(u)
+
+
+def bing_html(query, cfg):
+    """Extra search channel. RSS can miss job-detail URLs, so V8 also parses Bing HTML."""
+    url = "https://www.bing.com/search?q=" + quote(query) + "&count=" + str(int(cfg.get("v8_results_per_query", 20)))
+    r = fetch_url(url, cfg)
+    if not r:
+        return []
+    soup = BeautifulSoup(r.text, "html.parser")
+    out = []
+    for li in soup.select("li.b_algo"):
+        a = li.find("a", href=True)
+        if not a:
+            continue
+        target = decode_search_redirect(a.get("href"))
+        title = clean(a.get_text(" "))
+        snip_el = li.select_one(".b_caption p") or li.find("p")
+        snippet = clean(snip_el.get_text(" ") if snip_el else "")
+        if target:
+            out.append({"title": title, "url": target, "snippet": snippet, "query": query})
+        if len(out) >= int(cfg.get("v8_results_per_query", 20)):
+            break
+    return out
+
+
+def duckduckgo_html(query, cfg):
+    """Backup search channel for public job-board result links."""
+    url = "https://html.duckduckgo.com/html/?q=" + quote(query)
+    r = fetch_url(url, cfg)
+    if not r:
+        return []
+    soup = BeautifulSoup(r.text, "html.parser")
+    out = []
+    for res in soup.select(".result"):
+        a = res.select_one("a.result__a") or res.find("a", href=True)
+        if not a:
+            continue
+        target = decode_search_redirect(a.get("href"))
+        title = clean(a.get_text(" "))
+        snip_el = res.select_one(".result__snippet")
+        snippet = clean(snip_el.get_text(" ") if snip_el else "")
+        if target:
+            out.append({"title": title, "url": target, "snippet": snippet, "query": query})
+        if len(out) >= int(cfg.get("v8_results_per_query", 20)):
+            break
+    return out
+
+
+def extract_urls_from_text_blob(text_blob, base_url=""):
+    urls = set()
+    blob = html.unescape(text_blob or "")
+    # normal href/src links
+    for m in re.finditer(r"""(?:href|src)=[\"']([^\"']+)[\"']""", blob, flags=re.I):
+        urls.add(urljoin(base_url, html.unescape(m.group(1))))
+    # raw absolute URLs in JSON/scripts
+    for m in re.finditer(r"""https?:\\?/\\?/[^\s\"'<>\\]+""", blob, flags=re.I):
+        u = m.group(0).replace('\\/', '/')
+        urls.add(html.unescape(u))
+    return [decode_search_redirect(u) for u in urls]
+
+
+def title_from_url_slug(url):
+    """Build a readable fallback title/company from known job-board URL slugs."""
+    u = unquote(url or "")
+    d = host(u)
+    path = urlparse(u).path.strip("/")
+    slug = path.split("/")[-1]
+    if "naukri.com" in d:
+        slug = slug.replace("job-listings-", "")
+    slug = re.sub(r"[-_](?:\d{4,}|[a-f0-9]{8,}).*$", "", slug, flags=re.I)
+    words = [w for w in re.split(r"[-_]+", slug) if w and not w.isdigit()]
+    cleaned = " ".join(words[:14]).strip().title()
+    if not cleaned or len(cleaned) < 4:
+        return "Architect Job", "Hiring Company"
+    loc_words = {"mumbai","delhi","bangalore","bengaluru","hyderabad","pune","chennai","noida","gurugram","gurgaon","ahmedabad","india"}
+    job_words = []
+    company_words = []
+    for w in words:
+        if w.lower() in loc_words:
+            break
+        if len(job_words) < 5:
+            job_words.append(w)
+        elif len(company_words) < 5:
+            company_words.append(w)
+    title = " ".join(job_words).title() or cleaned
+    company = " ".join(company_words).title() if company_words else extract_company_from_signal(cleaned, "") or "Hiring Company"
+    return clean(title), clean(company)
+
+
+def detail_hit_from_url(url, fallback_title="", fallback_snippet="", query="", cfg=None):
+    """Fetch a job-detail page and create a search-hit-like object with better title/description."""
+    cfg = cfg or {}
+    title = clean(fallback_title)
+    snippet = clean(fallback_snippet)
+    r = fetch_url(url, cfg)
+    if r and r.text:
+        soup = BeautifulSoup(r.text, "html.parser")
+        meta_title = ""
+        for selector in ["meta[property='og:title']", "meta[name='twitter:title']"]:
+            tag = soup.select_one(selector)
+            if tag and tag.get("content"):
+                meta_title = clean(tag.get("content")); break
+        page_title = clean(soup.title.get_text(" ") if soup.title else "")
+        if meta_title:
+            title = meta_title
+        elif page_title:
+            title = page_title
+        meta_desc = ""
+        for selector in ["meta[property='og:description']", "meta[name='description']", "meta[name='twitter:description']"]:
+            tag = soup.select_one(selector)
+            if tag and tag.get("content"):
+                meta_desc = clean(tag.get("content")); break
+        body_text = clean(soup.get_text(" "))
+        if meta_desc:
+            snippet = meta_desc
+        elif body_text:
+            snippet = body_text[:700]
+    if not title:
+        t, c = title_from_url_slug(url)
+        title = f"{t} at {c}"
+    return {"title": title, "url": norm_url(url), "snippet": snippet, "query": query}
+
+
+def direct_job_board_search_urls(cfg):
+    roles = cfg.get("v8_roles") or [
+        "Junior Architect", "Architect", "Senior Architect", "Project Architect", "Design Architect",
+        "Interior Designer", "Interior Architect", "BIM Coordinator", "BIM Architect", "Revit Architect",
+        "3D Visualizer", "3D Visualiser", "Architectural Draftsman", "Landscape Architect", "Urban Designer",
+    ]
+    cities = cfg.get("v8_cities") or ["Mumbai", "Delhi", "Bengaluru", "Hyderabad", "Pune", "Chennai", "Ahmedabad", "Noida", "Gurugram"]
+    max_pairs = int(cfg.get("v8_max_direct_role_city_pairs", 55))
+    pairs = []
+    for role in roles:
+        for city in cities:
+            pairs.append((role, city))
+            if len(pairs) >= max_pairs:
+                break
+        if len(pairs) >= max_pairs:
+            break
+    urls = []
+    for role, city in pairs:
+        q = quote(role)
+        q_plus = quote(role.replace(" ", "+"))
+        loc = quote(city)
+        loc_plus = quote(city.replace(" ", "+"))
+        urls.extend([
+            (f"https://www.naukri.com/{role.lower().replace(' ', '-')}-jobs-in-{city.lower().replace(' ', '-')}", role, city),
+            (f"https://in.indeed.com/jobs?q={q_plus}&l={loc_plus}&fromage=14", role, city),
+            (f"https://www.linkedin.com/jobs/search?keywords={q}&location={loc}%2C%20India", role, city),
+            (f"https://www.timesjobs.com/candidate/job-search.html?searchType=personalizedSearch&txtKeywords={q}&txtLocation={loc}", role, city),
+        ])
+    return urls[: int(cfg.get("v8_max_direct_search_pages", 180))]
+
+
+def collect_direct_job_board_records(cfg):
+    if not bool(cfg.get("v8_direct_job_board_harvest_enabled", True)):
+        return []
+    print("=" * 80)
+    print("V8 DIRECT JOB-BOARD HARVEST | extracting specific apply links")
+    print("=" * 80)
+    target = int(cfg.get("v8_direct_target_records_per_run", 120))
+    records = []
+    seen_urls = set()
+    queries = cfg.get("v8_apply_link_search_queries") or cfg.get("v6_quantity_search_queries", [])
+    max_queries = int(cfg.get("v8_max_apply_link_queries", 90))
+    for query in queries[:max_queries]:
+        hits = []
+        hits.extend(bing_rss(query, cfg))
+        hits.extend(bing_html(query, cfg))
+        hits.extend(duckduckgo_html(query, cfg))
+        for hit in hits:
+            u = norm_url(hit.get("url"))
+            if not u or u in seen_urls:
+                continue
+            if not is_specific_public_job_detail_url(u):
+                continue
+            seen_urls.add(u)
+            detail_hit = detail_hit_from_url(u, hit.get("title"), hit.get("snippet"), query, cfg)
+            rec, reason = quantity_signal_to_record(detail_hit, cfg)
+            if rec:
+                records.append(rec)
+                print(f"V8 ACCEPT APPLY LINK | {rec.get('title')} | {rec.get('employer_name')} | {u}")
+            else:
+                print(f"V8 REJECT APPLY LINK | {u} | {reason}")
+            if len(records) >= target:
+                return records
+        time.sleep(float(cfg.get("v8_search_delay_seconds", 0.15)))
+
+    for page_url, role, city in direct_job_board_search_urls(cfg):
+        print(f"V8 DIRECT SEARCH PAGE | {role} | {city} | {page_url}")
+        r = fetch_url(page_url, cfg)
+        if not r or not r.text:
+            continue
+        soup = BeautifulSoup(r.text, "html.parser")
+        candidates = []
+        for a in soup.find_all("a", href=True):
+            u = decode_search_redirect(urljoin(page_url, a.get("href")))
+            if is_specific_public_job_detail_url(u):
+                candidates.append((u, clean(a.get_text(" "))))
+        for u in extract_urls_from_text_blob(r.text, page_url):
+            if is_specific_public_job_detail_url(u):
+                candidates.append((u, ""))
+        for u, anchor_title in candidates:
+            if u in seen_urls:
+                continue
+            seen_urls.add(u)
+            detail_hit = detail_hit_from_url(u, anchor_title or role, f"{role} job opening in {city}, India. Apply via public job link.", f"{role} {city}", cfg)
+            rec, reason = quantity_signal_to_record(detail_hit, cfg)
+            if rec:
+                if rec.get("location") == "India" and city:
+                    rec["location"] = f"{city}|India"
+                    rec["address"] = f"{city}, India"
+                records.append(rec)
+                print(f"V8 ACCEPT DIRECT | {rec.get('title')} | {rec.get('employer_name')} | {u}")
+            else:
+                print(f"V8 REJECT DIRECT | {u} | {reason}")
+            if len(records) >= target:
+                return records
+        time.sleep(float(cfg.get("v8_direct_page_delay_seconds", 0.25)))
+    return records
+
+
 def career_like_url(url):
     u = (url or "").lower()
     return any(x in u for x in ("career", "careers", "jobs", "job", "openings", "hiring", "join-us", "joinus", "vacancy"))
@@ -884,8 +1120,17 @@ def run(dry_run=False):
     print("=" * 80)
 
     quantity_records = collect_quantity_records(cfg)
+    direct_records = collect_direct_job_board_records(cfg)
+    merged_extra = []
+    seen_extra = set()
+    for r in (quantity_records + direct_records):
+        k = web_key(r)
+        if k not in seen_extra:
+            seen_extra.add(k)
+            merged_extra.append(r)
+    quantity_records = merged_extra
     print("=" * 80)
-    print(f"V7 clean quantity-mode public-source records before Sheet1 merge: {len(quantity_records)}")
+    print(f"V8 apply-link quantity records before Sheet1 merge: {len(quantity_records)}")
     print("=" * 80)
 
     if dry_run:
@@ -911,7 +1156,7 @@ def run(dry_run=False):
     deleted = delete_old_pipeline_tabs(service, sheet_id, cfg)
 
     print("=" * 80)
-    print("V7 SINGLE SHEET CLEAN QUANTITY COMPLETE")
+    print("V8 SINGLE SHEET APPLY LINK HARVEST COMPLETE")
     print(f"Sheet tab: {tab}")
     print(f"Existing kept: {stats['existing_kept']}")
     print(f"New/updated official accepted jobs: {stats['new_added']}")
@@ -1005,7 +1250,7 @@ def self_test():
     assert rows[0]["external_id"] == ""
     assert stats["rejected_count"] == 1
 
-    print("V7 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, specific LinkedIn/job-board detail URLs allowed for apply-link quantity mode, dedupe and blank external_id are working.")
+    print("V8 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, specific LinkedIn/job-board detail URLs allowed for apply-link quantity mode, dedupe and blank external_id are working.")
 
 
 def main():

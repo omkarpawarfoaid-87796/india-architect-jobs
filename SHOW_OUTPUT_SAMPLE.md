@@ -1,17 +1,9 @@
-# V7 Output Sample
+# V8 Output
 
-Final output is only in `Sheet1` using the website schema:
+Use only `Sheet1`.
 
-```text
-external_id | title | description | status | employer_author | employer_email | employer_name | expiry_date | application_deadline_date | featured | urgent | filled | apply_type | apply_url | apply_email | phone | salary | max_salary | salary_type | address | location | category | type | tag | experience | gender | industry | qualification | career_level | video_url | logo_url
-```
+The workflow name is:
 
-Example sources allowed in `apply_url`:
+`Single Sheet Job Finder V8 Apply Link Harvester`
 
-- `https://www.hafeezcontractor.com/careers`
-- `https://hingooarchitects.com/careers`
-- `https://www.naukri.com/job-listings-...`
-- `https://in.indeed.com/viewjob?...`
-- `https://www.linkedin.com/jobs/view/...`
-
-Only specific job detail links should appear. Generic search/content pages should not appear.
+Expected behavior: more rows than V7 because V8 extracts specific apply/job-detail links directly from public job-board search pages, not only from official career pages.

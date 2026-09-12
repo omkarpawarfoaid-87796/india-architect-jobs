@@ -1,4 +1,4 @@
-# Architect Jobs Collector V7 — Single Sheet Apply Link Mode
+# Architect Jobs Collector V8 — Apply Link Harvester
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -635,3 +635,69 @@ v6_quantity_search_queries:
   - 'site:timesjobs.com/candidate/JobDetailView.html "BIM" "India"'
   - 'site:timesjobs.com/candidate/JobDetailView.html "3D Visualizer" "India"'
 
+
+
+# -------------------------------------------------------------------
+# V8 Apply Link Harvester
+# -------------------------------------------------------------------
+# V8 does not rely only on Bing RSS. It also parses Bing HTML, DuckDuckGo
+# and public job-board search pages to extract specific apply/job-detail URLs.
+v8_direct_job_board_harvest_enabled: true
+v8_direct_target_records_per_run: 120
+v8_max_apply_link_queries: 120
+v8_results_per_query: 25
+v8_max_direct_role_city_pairs: 60
+v8_max_direct_search_pages: 180
+v8_search_delay_seconds: 0.15
+v8_direct_page_delay_seconds: 0.20
+
+v8_roles:
+  - Junior Architect
+  - Architect
+  - Senior Architect
+  - Project Architect
+  - Design Architect
+  - Interior Designer
+  - Interior Architect
+  - BIM Coordinator
+  - BIM Architect
+  - Revit Architect
+  - 3D Visualizer
+  - 3D Visualiser
+  - Architectural Draftsman
+  - Landscape Architect
+  - Urban Designer
+
+v8_cities:
+  - Mumbai
+  - Delhi
+  - Bengaluru
+  - Hyderabad
+  - Pune
+  - Chennai
+  - Ahmedabad
+  - Noida
+  - Gurugram
+  - Kolkata
+  - Jaipur
+  - Kochi
+
+v8_apply_link_search_queries:
+  - 'site:linkedin.com/jobs/view/ "Junior Architect" "India"'
+  - 'site:linkedin.com/jobs/view/ "Senior Architect" "India"'
+  - 'site:linkedin.com/jobs/view/ "Project Architect" "India"'
+  - 'site:linkedin.com/jobs/view/ "Interior Designer" "India"'
+  - 'site:linkedin.com/jobs/view/ "BIM Coordinator" "India"'
+  - 'site:linkedin.com/jobs/view/ "3D Visualizer" "India"'
+  - 'site:naukri.com/job-listings- "Junior Architect" "Mumbai"'
+  - 'site:naukri.com/job-listings- "Architect" "Mumbai"'
+  - 'site:naukri.com/job-listings- "Senior Architect" "Mumbai"'
+  - 'site:naukri.com/job-listings- "Interior Designer" "Mumbai"'
+  - 'site:naukri.com/job-listings- "BIM Coordinator" "India"'
+  - 'site:in.indeed.com/viewjob "Junior Architect" "India"'
+  - 'site:in.indeed.com/viewjob "Interior Designer" "India"'
+  - 'site:in.indeed.com/viewjob "BIM" "India"'
+  - 'site:foundit.in/job/ "Architect" "India"'
+  - 'site:foundit.in/job/ "Interior Designer" "India"'
+  - 'site:shine.com/jobs/ "Architect" "India"'
+  - 'site:timesjobs.com/candidate/JobDetailView.html "Architect" "India"'
