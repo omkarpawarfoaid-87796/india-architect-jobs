@@ -1,4 +1,4 @@
-name: Daily Architect Source Discovery V4.4.4
+name: Daily Architect Source Discovery V4.4.5
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     - cron: "35 20 * * *"
 
 concurrency:
-  group: architect-source-discovery-v444
+  group: architect-source-discovery-v445
   cancel-in-progress: false
 
 jobs:
