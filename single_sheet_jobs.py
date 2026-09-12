@@ -1,5 +1,5 @@
 """
-Single Sheet Job Finder V8.1
+Single Sheet Job Finder V8.2
 
 Goal:
 - One Google Sheet output only: Sheet1
@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 
 import collector as core
 
-VERSION = "V8.1-CLEAN-APPLY-LINK-MODE"
+VERSION = "V8.2-FINAL-WEBSITE-QUALITY"
 ONE_SHEET_TAB = "Sheet1"
 
 # Final website schema. Do not add or remove columns without developer approval.
@@ -93,7 +93,35 @@ SOFTWARE_EXCLUDES = (
     "enterprise architect", "data architect", "security architect", "network architect",
     "technical architect", "platform architect", "aws architect", "azure architect",
     "java architect", ".net architect", "salesforce architect",
+    "application architect", "systems architect", "infrastructure architect",
+    "software development", "engineer software", "software engineer", "software developer",
+    "technology systems", "information technology", "it architect", "devops",
+    "backend developer", "frontend developer", "full stack", "programmer",
 )
+
+# V8.2: keep quantity, but remove IT/software roles that only contain words
+# like "architecture" in the description. These must not enter an architecture
+# jobs website.
+BAD_ROLE_TITLE_TERMS = (
+    "software development", "engineer software", "software engineer", "software developer",
+    "developer", "programmer", "cloud", "data engineer", "data architect",
+    "network", "security", "devops", "technology systems", "technical consultant",
+    "backend", "frontend", "full stack", "information technology",
+)
+
+GOOD_ROLE_TITLE_TERMS = (
+    "architect", "architectural", "architecture", "interior designer", "interior architect",
+    "designer", "bim", "revit", "visualizer", "visualiser", "3d",
+    "render", "draft", "draught", "autocad", "facade", "landscape",
+    "urban", "parametric designer", "cad",
+)
+
+GENERIC_TITLES_ALLOWED_WITH_DESC = {
+    "senior associate", "associate", "design associate", "graduate engineer trainee architecture",
+    "draftsmen", "draftsman", "draughtsman",
+}
+
+MAX_REAL_EXPERIENCE_YEARS = 35
 
 SERVICE_PAGE_PREFIXES = (
     "interior designers in ", "best interior designers in ",
@@ -228,6 +256,63 @@ def is_blocked_final_url(url, cfg=None):
     return False
 
 
+
+def contains_bad_software_role(title="", description=""):
+    """Reject software/IT jobs even when the snippet mentions design architecture."""
+    title_l = clean(title).lower()
+    desc_l = clean(description).lower()
+    all_l = f"{title_l} {desc_l}"
+    if any(x in title_l for x in BAD_ROLE_TITLE_TERMS):
+        return True
+    if any(x in all_l for x in SOFTWARE_EXCLUDES):
+        return True
+    # Generic engineer/developer titles are not built-environment unless the title itself
+    # clearly says architect/interior/BIM/CAD/drafting/landscape/urban/facade.
+    if re.search(r"\b(engineer|developer|programmer)\b", title_l):
+        if not any(x in title_l for x in ("bim", "revit", "architect", "architectural", "architecture", "interior", "draft", "draught", "facade", "landscape", "urban", "cad", "autocad")):
+            return True
+    return False
+
+
+def title_has_built_environment_role(title="", description=""):
+    title_l = clean(title).lower()
+    desc_l = clean(description).lower()
+    if contains_bad_software_role(title, description):
+        return False
+    if any(x in title_l for x in GOOD_ROLE_TITLE_TERMS):
+        return True
+    # Allow a small set of generic job-board titles only when the snippet itself
+    # has strong built-environment evidence.
+    if title_l in GENERIC_TITLES_ALLOWED_WITH_DESC:
+        return any(x in desc_l for x in ("architect", "architecture", "interior", "bim", "revit", "draft", "draught", "autocad"))
+    return False
+
+
+def extract_title_from_snippet(snippet=""):
+    """Recover a proper role when LinkedIn/search title is generic (e.g. Senior Associate)."""
+    text = clean(snippet)
+    patterns = [
+        r"Job\s*Title\s*[:\-–—]\s*([^\.\n\r]{4,90})",
+        r"Designation\s*[:\-–—]\s*([^\.\n\r]{4,90})",
+        r"Position\s*[:\-–—]\s*([^\.\n\r]{4,90})",
+        r"Role\s*[:\-–—]\s*([^\.\n\r]{4,90})",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, flags=re.I)
+        if not m:
+            continue
+        candidate = clean(m.group(1))
+        candidate = re.split(r"(?:Location|Experience|Candidate|Responsibilities|Requirements)\s*[:\-–—]", candidate, flags=re.I)[0]
+        candidate = clean(candidate.strip(" -|,–—"))
+        # If the source writes "Senior Associate - Draughtsman", keep the design part too.
+        if title_has_built_environment_role(candidate, snippet):
+            return candidate
+    return ""
+
+
+def years_in_text(value=""):
+    return [int(x) for x in re.findall(r"\b(\d{1,2})\s*\+?\s*(?:years?|yrs?)\b", clean(value), flags=re.I)]
+
 def hard_reject_reason(title="", description="", url="", employer=""):
     title_l = clean(title).lower()
     desc_l = clean(description).lower()
@@ -251,9 +336,8 @@ def hard_reject_reason(title="", description="", url="", employer=""):
         if service_hits >= 1 or "/interior-designers" in url_l or "/modular-kitchen" in url_l or "/wardrobe" in url_l:
             return "HomeLane service page, not a vacancy"
 
-    text = f"{title_l} {desc_l}"
-    if any(x in text for x in SOFTWARE_EXCLUDES):
-        return "Software/IT architect role, not built-environment"
+    if contains_bad_software_role(title, description):
+        return "Software/IT/software-development role, not built-environment"
     return ""
 
 
@@ -310,10 +394,7 @@ def is_generic_job_search_page(title="", url="", snippet=""):
 
 
 def role_relevant(title, description=""):
-    text = f"{clean(title)} {clean(description)}".lower()
-    if any(x in text for x in SOFTWARE_EXCLUDES):
-        return False
-    return any(x in text for x in ROLE_KEYWORDS)
+    return title_has_built_environment_role(title, description)
 
 
 def has_india_location(text):
@@ -365,6 +446,9 @@ def website_record_valid(record, cfg):
     expiry = core.parse_date(record.get("expiry_date"))
     if expiry and expiry < now_ist_date():
         return False, "Expired"
+    exp_years = years_in_text(record.get("experience"))
+    if exp_years and max(exp_years) > MAX_REAL_EXPERIENCE_YEARS:
+        return False, "Invalid experience value from company-history text"
     if not public_apply_ok(record, cfg):
         return False, "No public official apply method"
     if url and is_linkedin_url(url) and not (cfg.get("allow_linkedin_job_apply_url", True) and is_specific_linkedin_job_url(url)):
@@ -690,6 +774,8 @@ def strip_location_tail(value):
 def clean_company_name(value, title="", url=""):
     value = clean(html.unescape(value or ""))
     value = re.sub(r"\s*\|\s*LinkedIn.*$", "", value, flags=re.I)
+    # V8.2: employer_name should be company only; city already exists in location/address.
+    value = re.sub(rf"\s+[—–-]\s+{INDIA_CITY_PATTERN}\s*$", "", value, flags=re.I)
     value = strip_location_tail(value)
     # "ABC hiring Junior Architect ..." -> "ABC"
     m = re.match(r"^(.+?)\s+hiring\s+.+$", value, flags=re.I)
@@ -732,6 +818,11 @@ def clean_job_title(value, employer="", snippet="", url=""):
         first = re.split(r"\s[-–—]\s", raw)[0]
         if role_relevant(first, snippet):
             raw = first
+    # V8.2: recover better title from snippet when search result title is generic.
+    if raw.lower() in GENERIC_TITLES_ALLOWED_WITH_DESC or not role_relevant(raw, snippet) or len(raw) > 80:
+        snippet_title = extract_title_from_snippet(snippet)
+        if snippet_title and role_relevant(snippet_title, snippet):
+            raw = snippet_title
     # Fallback from slug if title still looks generic/bad.
     if not role_relevant(raw, snippet) or len(raw) > 80:
         slug_title, _ = slug_title_company(url)
@@ -1026,26 +1117,35 @@ def infer_category(title, desc=""):
 
 
 def infer_career_level(title, desc=""):
-    text = f"{title} {desc}".lower()
-    if any(x in text for x in ("senior", "lead", "manager", "head")):
-        return "Senior Level"
-    if any(x in text for x in ("junior", "fresher", "entry", "0-", "0 to", "1 year")):
+    title_l = clean(title).lower()
+    desc_l = clean(desc).lower()
+    if re.search(r"(junior|jr\.?|fresher|entry|intern|trainee|graduate)", title_l) or re.search(r"0\s*(?:-|to|–)\s*2\s*(?:years?|yrs?)", desc_l):
         return "Entry Level"
+    if re.search(r"(senior|sr\.?|lead|manager|head|principal|director)", title_l):
+        return "Senior Level"
+    if re.search(r"(5\+|6\+|7\+|8\+|9\+|10\+)\s*(?:years?|yrs?)", desc_l):
+        return "Senior Level"
     return "Mid Level"
 
 
 def extract_experience(text):
     t = clean(text)
-    m = re.search(r"(\d+\s*(?:-|to|–)\s*\d+\s*(?:years?|yrs?))", t, re.I)
-    if m:
-        return clean(m.group(1))
-    m = re.search(r"(minimum\s+\d+\s*(?:years?|yrs?))", t, re.I)
-    if m:
-        return clean(m.group(1))
-    m = re.search(r"(\d+\+?\s*(?:years?|yrs?))", t, re.I)
-    if m:
-        return clean(m.group(1))
-    return ""
+    candidates = []
+    for pat in [
+        r"(\d+\s*(?:-|to|–)\s*\d+\s*(?:years?|yrs?))",
+        r"(minimum\s+\d+\s*(?:years?|yrs?))",
+        r"(\d+\+?\s*(?:years?|yrs?))",
+    ]:
+        for m in re.finditer(pat, t, re.I):
+            value = clean(m.group(1))
+            nums = years_in_text(value)
+            if nums and max(nums) <= MAX_REAL_EXPERIENCE_YEARS:
+                # Avoid company-history lines like "more than 60 years since...".
+                window = t[max(0, m.start()-35):m.end()+45].lower()
+                if "since" in window and "experience" not in window:
+                    continue
+                candidates.append(value)
+    return candidates[0] if candidates else ""
 
 
 def quantity_signal_to_record(hit, cfg):
@@ -1084,7 +1184,7 @@ def quantity_signal_to_record(hit, cfg):
     address = f"{city}, India" if city != "India" else "India"
     if is_blocked_final_url(url, cfg):
         return None, "Final URL blocked"
-    desc = snippet or f"{job_title} opening at {employer}. Public job source detected by V8.1 Clean Apply Link Mode."
+    desc = snippet or f"{job_title} opening at {employer}. Public job source detected by V8.2 Final Website Quality Mode."
     exp = extract_experience(f"{title} {snippet}")
     tag_terms = []
     for term in cfg.get("skill_terms", []):
@@ -1133,10 +1233,10 @@ def collect_quantity_records(cfg):
     max_queries = int(cfg.get("v6_quantity_max_queries_per_run", 80))
     target = int(cfg.get("v6_quantity_target_records_per_run", 75))
     print("=" * 80)
-    print(f"V8.1 CLEAN APPLY LINK MODE | queries={min(len(queries), max_queries)} target={target}")
+    print(f"V8.2 FINAL WEBSITE QUALITY MODE | queries={min(len(queries), max_queries)} target={target}")
     print("=" * 80)
     for query in queries[:max_queries]:
-        print(f"V8.1 JOB SEARCH | {query}")
+        print(f"V8.2 JOB SEARCH | {query}")
         for hit in bing_rss(query, cfg):
             u = norm_url(hit.get("url"))
             if not u or u in seen_urls:
@@ -1145,9 +1245,9 @@ def collect_quantity_records(cfg):
             rec, reason = quantity_signal_to_record(hit, cfg)
             if rec:
                 records.append(rec)
-                print(f"V8.1 ACCEPT SIGNAL JOB | {rec.get('employer_name')} | {rec.get('title')} | {u}")
+                print(f"V8.2 ACCEPT SIGNAL JOB | {rec.get('employer_name')} | {rec.get('title')} | {u}")
             else:
-                print(f"V8.1 REJECT SIGNAL | {hit.get('title')} | {reason}")
+                print(f"V8.2 REJECT SIGNAL | {hit.get('title')} | {reason}")
             if len(records) >= target:
                 return records
         time.sleep(float(cfg.get("v6_search_delay_seconds", 0.25)))
@@ -1250,7 +1350,7 @@ def build_single_sheet_records(existing_records, jobs, cfg, extra_records=None):
         valid, reason = website_record_valid(web, cfg)
         if not valid:
             rejected_count += 1
-            print(f"V8.1 REJECT EXTRA | {web.get('employer_name')} | {web.get('title')} | {reason}")
+            print(f"V8.2 REJECT EXTRA | {web.get('employer_name')} | {web.get('title')} | {reason}")
             continue
         key = web_key(web)
         if key not in by_key:
@@ -1297,7 +1397,7 @@ def run(dry_run=False):
             merged_extra.append(r)
     quantity_records = merged_extra
     print("=" * 80)
-    print(f"V8.1 clean apply-link records before Sheet1 merge: {len(quantity_records)}")
+    print(f"V8.2 final quality apply-link records before Sheet1 merge: {len(quantity_records)}")
     print("=" * 80)
 
     if dry_run:
@@ -1323,7 +1423,7 @@ def run(dry_run=False):
     deleted = delete_old_pipeline_tabs(service, sheet_id, cfg)
 
     print("=" * 80)
-    print("V8.1 SINGLE SHEET CLEAN APPLY LINK COMPLETE")
+    print("V8.2 SINGLE SHEET FINAL WEBSITE QUALITY COMPLETE")
     print(f"Sheet tab: {tab}")
     print(f"Existing kept: {stats['existing_kept']}")
     print(f"New/updated official accepted jobs: {stats['new_added']}")
@@ -1435,7 +1535,7 @@ def self_test():
     assert rows[0]["external_id"] == ""
     assert stats["rejected_count"] == 1
 
-    print("V8.1 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, specific LinkedIn/job-board detail URLs allowed, tracking parameters removed, titles/companies cleaned, dedupe and blank external_id are working.")
+    print("V8.2 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, specific LinkedIn/job-board detail URLs allowed, tracking parameters removed, titles/companies cleaned, dedupe and blank external_id are working.")
 
 
 def main():

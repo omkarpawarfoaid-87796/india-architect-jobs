@@ -1,9 +1,19 @@
-# V8.1 Output
+# V8.2 Expected Output
 
-Use only `Sheet1`.
+Sheet1 should contain only website-ready jobs.
 
-The workflow name is:
+Good examples:
 
-`Single Sheet Job Finder V8.1.1 Clean Apply Link`
+- Junior Architect — Abhikalpan Architects and Planners
+- BIM Architect — Enigma Design Technologies
+- Interior Designer — Livspace
+- Project Architect — MBH Architects
+- Architectural Draftsman — Architect Hafeez Contractor
 
-Expected behavior: more rows than V7 because V8.1 extracts specific apply/job-detail links directly from public job-board search pages, not only from official career pages.
+Rejected examples:
+
+- Engineer Software Development Technology Systems — Rohde & Schwarz
+- Software Architect / Cloud Architect / Data Architect / Solution Architect
+- Wikipedia / Dictionary / Autodesk Revit / BIM article pages
+- HomeLane city/service pages
+

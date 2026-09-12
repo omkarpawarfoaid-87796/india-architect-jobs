@@ -1,4 +1,4 @@
-# Architect Jobs Collector V8 — Apply Link Harvester
+# Architect Jobs Collector V8.2 — Final Website Quality
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -701,3 +701,16 @@ v8_apply_link_search_queries:
   - 'site:foundit.in/job/ "Interior Designer" "India"'
   - 'site:shine.com/jobs/ "Architect" "India"'
   - 'site:timesjobs.com/candidate/JobDetailView.html "Architect" "India"'
+
+
+# -------------------------------------------------------------------
+# V8.2 Final Website Quality
+# -------------------------------------------------------------------
+# Keep V8 quantity and apply links, but remove bad-role rows such as
+# software development / cloud / solution / data / IT architect jobs.
+# Also removes impossible experience values that come from company-history
+# text such as "60 years since..." rather than candidate requirement.
+v82_final_quality_enabled: true
+v82_reject_software_it_roles: true
+v82_clean_company_city_suffix: true
+v82_max_real_experience_years: 35
