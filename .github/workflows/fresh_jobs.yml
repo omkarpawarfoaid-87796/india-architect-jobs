@@ -1,4 +1,4 @@
-name: Fresh Architect Job Discovery V4.4.4
+name: Fresh Architect Job Discovery V4.4.5
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     - cron: "42 */3 * * *"
 
 concurrency:
-  group: fresh-architect-job-discovery-v444
+  group: fresh-architect-job-discovery-v445
   cancel-in-progress: false
 
 jobs:
