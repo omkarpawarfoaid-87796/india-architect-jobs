@@ -1,5 +1,5 @@
 """
-Single Sheet Job Finder V7
+Single Sheet Job Finder V8.1
 
 Goal:
 - One Google Sheet output only: Sheet1
@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 
 import collector as core
 
-VERSION = "V8-APPLY-LINK-HARVESTER"
+VERSION = "V8.1-CLEAN-APPLY-LINK-MODE"
 ONE_SHEET_TAB = "Sheet1"
 
 # Final website schema. Do not add or remove columns without developer approval.
@@ -85,7 +85,7 @@ ROLE_KEYWORDS = (
     "architect", "architecture", "architectural", "interior designer",
     "interior architect", "urban designer", "urban planner", "landscape architect",
     "bim", "revit", "visualizer", "visualiser", "3d render", "3d artist",
-    "draftsman", "draughtsman", "autocad", "site architect", "design manager",
+    "draftsman", "draughtsman", "draftsperson", "draftsmen", "draftsmem", "autocad", "site architect", "facade architect", "design manager",
 )
 
 SOFTWARE_EXCLUDES = (
@@ -336,15 +336,7 @@ def public_apply_ok(record, cfg=None):
 
 
 def web_key(record):
-    parts = [
-        clean(record.get("title")).lower(),
-        clean(record.get("employer_name")).lower(),
-        clean(record.get("location")).lower(),
-        norm_url(record.get("apply_url")).lower(),
-        clean(record.get("apply_email")).lower(),
-    ]
-    raw = "|".join(parts)
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+    return record_identity_key(record)
 
 
 def website_record_valid(record, cfg):
@@ -388,6 +380,13 @@ def normalize_existing_row(record, cfg):
     # Ensure every output row has exactly the web schema and external_id stays blank.
     out = {h: clean(record.get(h, "")) for h in WEBSITE_HEADERS}
     out["external_id"] = ""
+    out["apply_url"] = clean_apply_url(out.get("apply_url"))
+    fixed_title, fixed_company = clean_title_company_pair(out.get("title"), out.get("employer_name"), out.get("description"), out.get("apply_url"))
+    if fixed_title:
+        out["title"] = fixed_title
+    if fixed_company:
+        out["employer_name"] = fixed_company
+        out["employer_author"] = fixed_company
     if not out.get("expiry_date"):
         out["expiry_date"] = ddmmyyyy(now_ist_date() + timedelta(days=int(cfg.get("website_rolling_expiry_days", 7))))
     return out
@@ -612,6 +611,188 @@ def title_from_url_slug(url):
     return clean(title), clean(company)
 
 
+def linkedin_job_id(url):
+    """Return the numeric LinkedIn job id from a /jobs/view/ URL."""
+    path = unquote(urlparse(url or "").path)
+    m = re.search(r"/jobs/view/[^/?#]*?(\d{7,})", path, flags=re.I)
+    return m.group(1) if m else ""
+
+
+def clean_apply_url(url):
+    """Remove search/tracking parameters so duplicates collapse into one clean apply link."""
+    u = norm_url(url)
+    if not u:
+        return ""
+    parsed = urlparse(u)
+    d = host(u)
+    path = parsed.path.rstrip("/")
+    if is_linkedin_url(u):
+        m = re.search(r"/jobs/view/([^/?#]+)", path, flags=re.I)
+        if m:
+            slug = unquote(m.group(1)).strip("/")
+            # Use India LinkedIn host because these are India job links in our search.
+            return f"https://in.linkedin.com/jobs/view/{quote(slug, safe='-%_+')}"
+        return u.split("?", 1)[0].split("#", 1)[0]
+    if "indeed.com" in d:
+        qs = parse_qs(parsed.query)
+        jk = (qs.get("jk") or [""])[0]
+        if jk:
+            base = f"{parsed.scheme or 'https'}://{parsed.netloc}{path or '/viewjob'}"
+            return f"{base}?jk={quote(jk)}"
+    if is_public_job_board_url(u):
+        # Most board job-detail URLs keep the job id in the path; query params are tracking.
+        return f"{parsed.scheme or 'https'}://{parsed.netloc}{path}"
+    return u.split("#", 1)[0]
+
+
+INDIA_CITY_PATTERN = r"(?:Mumbai|Navi Mumbai|Thane|Pune|New Delhi|Delhi|Gurugram|Gurgaon|Noida|Bengaluru|Bangalore|Hyderabad|Chennai|Ahmedabad|Kolkata|Jaipur|Kochi|Surat|Goa|India|Borivali|Worli|Wadala|Kurla|Tardeo|Defence Colony)"
+
+
+def title_case_soft(value):
+    value = clean(value)
+    if not value:
+        return value
+    # Keep existing all-caps abbreviations but title-case obvious slug-like lowercase strings.
+    if value.islower() or "-" in value:
+        value = value.replace("-", " ").title()
+    value = re.sub(r"\bBim\b", "BIM", value)
+    value = re.sub(r"\bCad\b", "CAD", value)
+    value = re.sub(r"\bAutocad\b", "AutoCAD", value)
+    value = re.sub(r"\bLlp\b", "LLP", value)
+    value = re.sub(r"\bPvt\b", "Pvt", value)
+    return clean(value)
+
+
+def slug_title_company(url):
+    """Parse useful title/company from job-board slugs like role-at-company-446123."""
+    path = unquote(urlparse(url or "").path)
+    m = re.search(r"/jobs/view/([^/?#]+)", path, flags=re.I)
+    slug = m.group(1) if m else path.strip("/").split("/")[-1]
+    slug = re.sub(r"[-_](?:\d{7,}|[a-f0-9]{8,}).*$", "", slug, flags=re.I)
+    if not slug:
+        return "", ""
+    slug = slug.replace("%E2%80%93", "-")
+    if "-at-" in slug:
+        role, company = slug.split("-at-", 1)
+        return title_case_soft(role), title_case_soft(company)
+    return title_case_soft(slug), ""
+
+
+def strip_location_tail(value):
+    value = clean(value)
+    # Remove trailing LinkedIn location tail: "in Mumbai, Maharashtra, India".
+    value = re.sub(rf"\s+in\s+{INDIA_CITY_PATTERN}(?:\s+Metropolitan\s+Region)?(?:,\s*[^,]+)*\s*$", "", value, flags=re.I)
+    value = re.sub(r"\s+Metropolitan\s+Region\s*$", "", value, flags=re.I)
+    value = re.sub(r",\s*(Maharashtra|Delhi|Karnataka|Telangana|Tamil Nadu|Gujarat|India)\s*,?\s*$", "", value, flags=re.I)
+    return clean(value)
+
+
+def clean_company_name(value, title="", url=""):
+    value = clean(html.unescape(value or ""))
+    value = re.sub(r"\s*\|\s*LinkedIn.*$", "", value, flags=re.I)
+    value = strip_location_tail(value)
+    # "ABC hiring Junior Architect ..." -> "ABC"
+    m = re.match(r"^(.+?)\s+hiring\s+.+$", value, flags=re.I)
+    if m:
+        value = m.group(1)
+    # "BIM at Jacobs" / "Life Science & Tech - GFS at Burns & McDonnell India" -> company after last at
+    m = re.search(r"\bat\s+([A-Za-z0-9&.,'()+/ ®\- ]{2,90})$", value, flags=re.I)
+    if m and any(role in value.lower() for role in ("architect", "designer", "bim", "draft", "facade", "real estate", "life science")):
+        value = m.group(1)
+    # If company is only a location, try URL slug company.
+    if re.fullmatch(rf"{INDIA_CITY_PATTERN}(?:,\s*[^,]+)*", value, flags=re.I) or value.lower() in {"design", "real estate", "architecture", "interior design", "bim"}:
+        _, slug_company = slug_title_company(url)
+        if slug_company:
+            value = slug_company
+    value = re.sub(r"\b(hiring|job|jobs|apply|career|careers)\b", "", value, flags=re.I)
+    value = strip_location_tail(value).strip(" -|,–—")
+    return title_case_soft(value[:90]) or "Hiring Company"
+
+
+def clean_job_title(value, employer="", snippet="", url=""):
+    raw = clean(html.unescape(value or ""))
+    raw = re.sub(r"\s*\|\s*LinkedIn.*$", "", raw, flags=re.I)
+    raw = re.sub(r"\s*[-–—]\s*(LinkedIn|Naukri\.com|Indeed|Glassdoor|Foundit|Shine|TimesJobs|Internshala).*$", "", raw, flags=re.I)
+    raw = strip_location_tail(raw)
+
+    # "Apply for Junior Architect at ABC in Mumbai" -> "Junior Architect"
+    m = re.match(r"^Apply\s+for\s+(.+?)\s+at\s+.+$", raw, flags=re.I)
+    if m:
+        raw = m.group(1)
+    # "ABC hiring Junior Architect in Mumbai" -> "Junior Architect"
+    m = re.match(rf"^.+?\s+hiring\s+(.+?)(?:\s+in\s+{INDIA_CITY_PATTERN}.*)?$", raw, flags=re.I)
+    if m:
+        raw = m.group(1)
+    # "Junior Architect at ABC" -> "Junior Architect"
+    m = re.match(r"^(.+?)\s+at\s+.+$", raw, flags=re.I)
+    if m:
+        raw = m.group(1)
+    # For titles like "Deputy Architect - BIM at Jacobs" keep the role portion.
+    if " - " in raw or " – " in raw or " — " in raw:
+        first = re.split(r"\s[-–—]\s", raw)[0]
+        if role_relevant(first, snippet):
+            raw = first
+    # Fallback from slug if title still looks generic/bad.
+    if not role_relevant(raw, snippet) or len(raw) > 80:
+        slug_title, _ = slug_title_company(url)
+        if slug_title and role_relevant(slug_title, snippet):
+            raw = slug_title
+    raw = re.sub(r"\b(hiring|apply for|job opening|opening)\b", "", raw, flags=re.I)
+    raw = strip_location_tail(raw).strip(" -|,–—")
+    return title_case_soft(raw[:90])
+
+
+def clean_title_company_pair(title, employer, snippet="", url=""):
+    raw = clean(html.unescape(title or ""))
+    emp = clean(html.unescape(employer or ""))
+
+    # Prefer exact LinkedIn-style patterns from title.
+    m = re.match(rf"^(.+?)\s+hiring\s+(.+?)(?:\s+in\s+{INDIA_CITY_PATTERN}.*)?$", raw, flags=re.I)
+    if m:
+        emp = m.group(1)
+        title = m.group(2)
+    else:
+        m = re.match(r"^Apply\s+for\s+(.+?)\s+at\s+(.+?)(?:\s+in\s+.+)?$", raw, flags=re.I)
+        if m:
+            title, emp = m.group(1), m.group(2)
+        else:
+            m = re.match(r"^(.+?)\s+at\s+(.+?)(?:\s+in\s+.+)?$", raw, flags=re.I)
+            if m:
+                title, emp = m.group(1), m.group(2)
+            elif " at " in raw.lower():
+                # "Associate Senior Architect - Life Science & Tech - GFS at Burns & McDonnell India"
+                before, after = re.split(r"\s+at\s+", raw, maxsplit=1, flags=re.I)
+                title, emp = before, after
+
+    # Slug fallback can recover company when the search title is messy.
+    slug_title, slug_company = slug_title_company(url)
+    if (not emp or re.search(r"\bhiring\b|,\s*$", emp, re.I) or emp.lower() in {"design", "real estate", "architecture", "interior design", "bim"}) and slug_company:
+        emp = slug_company
+    if (not title or len(title) > 95 or not role_relevant(title, snippet)) and slug_title:
+        title = slug_title
+
+    title = clean_job_title(title, emp, snippet, url)
+    emp = clean_company_name(emp, title, url)
+    return title, emp
+
+
+def record_identity_key(record):
+    """Dedupe strongly by source job id, then by clean title/company/location."""
+    url = clean_apply_url(record.get("apply_url"))
+    if url and is_linkedin_url(url):
+        jid = linkedin_job_id(url)
+        if jid:
+            return f"linkedin:{jid}"
+    if url and is_public_job_board_url(url):
+        parsed = urlparse(url)
+        return f"board:{host(url)}:{parsed.path.lower().rstrip('/')}:{parsed.query.lower()}"
+    title = clean_job_title(record.get("title"), record.get("employer_name"), record.get("description"), url).lower()
+    company = clean_company_name(record.get("employer_name"), title, url).lower()
+    loc = clean(record.get("location") or record.get("address")).lower()
+    email = clean(record.get("apply_email") or record.get("employer_email")).lower()
+    return "text:" + hashlib.sha1(f"{title}|{company}|{loc}|{email}".encode("utf-8")).hexdigest()
+
+
 def detail_hit_from_url(url, fallback_title="", fallback_snippet="", query="", cfg=None):
     """Fetch a job-detail page and create a search-hit-like object with better title/description."""
     cfg = cfg or {}
@@ -815,31 +996,17 @@ def strip_job_board_suffix(title):
 
 
 def parse_signal_job_title_company(title, snippet="", url=""):
-    raw = clean(html.unescape(title or ""))
-    raw = re.sub(r"\s*\|\s*.*$", "", raw)
-    raw = re.sub(r"\s*[-–—]\s*(Naukri\.com|Indeed|LinkedIn|Glassdoor|Foundit|Shine|TimesJobs|Internshala).*$", "", raw, flags=re.I)
-    parts = [clean(p) for p in re.split(r"\s[-–—]\s", raw) if clean(p)]
-    company = ""
-    job_title = strip_job_board_suffix(raw)
-    if len(parts) >= 2:
-        job_title = strip_job_board_suffix(parts[0])
-        # choose a later part that looks like company, not location/experience
-        for p in parts[1:3]:
-            if not re.search(r"\b(year|yrs?|experience|mumbai|delhi|india|pune|bangalore|bengaluru|hyderabad|chennai)\b", p, re.I):
-                company = re.sub(r"\b(Hiring|Recruitment|Jobs?)\b", "", p, flags=re.I).strip()
-                break
-    m = re.search(r"\bat\s+([A-Z][A-Za-z0-9&.,'() /-]{2,80})", raw)
-    if m and not company:
-        company = clean(m.group(1))
-    if not company:
-        company = extract_company_from_signal(raw, snippet)
-    if not company:
-        d = host(url)
-        company = d.replace("www.", "").split(".")[0].title() if d else "Hiring Company"
-    # Keep titles simple; reject huge titles later.
-    job_title = re.sub(r"\bHiring For\b", "", job_title, flags=re.I).strip(" -|–—")
-    return clean(job_title[:90]), clean(company[:90])
-
+    job_title, company = clean_title_company_pair(title, "", snippet, url)
+    if not company or company == "Hiring Company":
+        company = extract_company_from_signal(title, snippet)
+    if not company or company == "Hiring Company":
+        _, slug_company = slug_title_company(url)
+        if slug_company:
+            company = slug_company
+    if not job_title:
+        slug_title, _ = slug_title_company(url)
+        job_title = slug_title or "Architect Job"
+    return clean_job_title(job_title, company, snippet, url), clean_company_name(company, job_title, url)
 
 def infer_category(title, desc=""):
     text = f"{title} {desc}".lower()
@@ -882,7 +1049,7 @@ def extract_experience(text):
 
 
 def quantity_signal_to_record(hit, cfg):
-    url = norm_url(hit.get("url"))
+    url = clean_apply_url(hit.get("url"))
     title = clean(hit.get("title"))
     snippet = clean(BeautifulSoup(hit.get("snippet") or "", "html.parser").get_text(" "))
     query = clean(hit.get("query"))
@@ -917,7 +1084,7 @@ def quantity_signal_to_record(hit, cfg):
     address = f"{city}, India" if city != "India" else "India"
     if is_blocked_final_url(url, cfg):
         return None, "Final URL blocked"
-    desc = snippet or f"{job_title} opening at {employer}. Public job source detected by V7 Apply Link Mode."
+    desc = snippet or f"{job_title} opening at {employer}. Public job source detected by V8.1 Clean Apply Link Mode."
     exp = extract_experience(f"{title} {snippet}")
     tag_terms = []
     for term in cfg.get("skill_terms", []):
@@ -966,10 +1133,10 @@ def collect_quantity_records(cfg):
     max_queries = int(cfg.get("v6_quantity_max_queries_per_run", 80))
     target = int(cfg.get("v6_quantity_target_records_per_run", 75))
     print("=" * 80)
-    print(f"V7 CLEAN QUANTITY MODE | queries={min(len(queries), max_queries)} target={target}")
+    print(f"V8.1 CLEAN APPLY LINK MODE | queries={min(len(queries), max_queries)} target={target}")
     print("=" * 80)
     for query in queries[:max_queries]:
-        print(f"V7 JOB SEARCH | {query}")
+        print(f"V8.1 JOB SEARCH | {query}")
         for hit in bing_rss(query, cfg):
             u = norm_url(hit.get("url"))
             if not u or u in seen_urls:
@@ -978,9 +1145,9 @@ def collect_quantity_records(cfg):
             rec, reason = quantity_signal_to_record(hit, cfg)
             if rec:
                 records.append(rec)
-                print(f"V7 ACCEPT SIGNAL JOB | {rec.get('employer_name')} | {rec.get('title')} | {u}")
+                print(f"V8.1 ACCEPT SIGNAL JOB | {rec.get('employer_name')} | {rec.get('title')} | {u}")
             else:
-                print(f"V7 REJECT SIGNAL | {hit.get('title')} | {reason}")
+                print(f"V8.1 REJECT SIGNAL | {hit.get('title')} | {reason}")
             if len(records) >= target:
                 return records
         time.sleep(float(cfg.get("v6_search_delay_seconds", 0.25)))
@@ -1083,7 +1250,7 @@ def build_single_sheet_records(existing_records, jobs, cfg, extra_records=None):
         valid, reason = website_record_valid(web, cfg)
         if not valid:
             rejected_count += 1
-            print(f"V7 REJECT EXTRA | {web.get('employer_name')} | {web.get('title')} | {reason}")
+            print(f"V8.1 REJECT EXTRA | {web.get('employer_name')} | {web.get('title')} | {reason}")
             continue
         key = web_key(web)
         if key not in by_key:
@@ -1130,7 +1297,7 @@ def run(dry_run=False):
             merged_extra.append(r)
     quantity_records = merged_extra
     print("=" * 80)
-    print(f"V8 apply-link quantity records before Sheet1 merge: {len(quantity_records)}")
+    print(f"V8.1 clean apply-link records before Sheet1 merge: {len(quantity_records)}")
     print("=" * 80)
 
     if dry_run:
@@ -1156,7 +1323,7 @@ def run(dry_run=False):
     deleted = delete_old_pipeline_tabs(service, sheet_id, cfg)
 
     print("=" * 80)
-    print("V8 SINGLE SHEET APPLY LINK HARVEST COMPLETE")
+    print("V8.1 SINGLE SHEET CLEAN APPLY LINK COMPLETE")
     print(f"Sheet tab: {tab}")
     print(f"Existing kept: {stats['existing_kept']}")
     print(f"New/updated official accepted jobs: {stats['new_added']}")
@@ -1197,6 +1364,24 @@ def self_test():
     })
     ok, reason = website_record_valid(linkedin, {**cfg, "allow_linkedin_job_apply_url": True})
     assert ok, reason
+
+    messy_hit = {
+        "title": "ANA hiring Interior Draftsmem in Mumbai, Maharashtra, India",
+        "snippet": "Posted today. Company Description ANA is an interior design and architecture firm. Apply now.",
+        "url": "https://in.linkedin.com/jobs/view/interior-draftsmem-4461315335?position=58&pageNum=0&trackingId=abc",
+        "query": "Interior Designer Mumbai India LinkedIn",
+    }
+    rec, reason = quantity_signal_to_record(messy_hit, {**cfg, "allow_linkedin_job_apply_url": True})
+    assert rec, reason
+    assert rec["title"] == "Interior Draftsmem", rec["title"]
+    assert rec["employer_name"] == "ANA", rec["employer_name"]
+    assert rec["apply_url"] == "https://in.linkedin.com/jobs/view/interior-draftsmem-4461315335", rec["apply_url"]
+
+    duplicate_hit = dict(messy_hit)
+    duplicate_hit["url"] = "https://in.linkedin.com/jobs/view/interior-draftsmem-4461315335"
+    rec2, reason = quantity_signal_to_record(duplicate_hit, {**cfg, "allow_linkedin_job_apply_url": True})
+    assert rec2, reason
+    assert web_key(rec) == web_key(rec2)
 
     linkedin_search = dict(linkedin)
     linkedin_search["apply_url"] = "https://www.linkedin.com/jobs/search?keywords=architect"
@@ -1250,7 +1435,7 @@ def self_test():
     assert rows[0]["external_id"] == ""
     assert stats["rejected_count"] == 1
 
-    print("V8 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, specific LinkedIn/job-board detail URLs allowed for apply-link quantity mode, dedupe and blank external_id are working.")
+    print("V8.1 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, specific LinkedIn/job-board detail URLs allowed, tracking parameters removed, titles/companies cleaned, dedupe and blank external_id are working.")
 
 
 def main():

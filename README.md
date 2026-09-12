@@ -1,8 +1,8 @@
-# Architect Job Collector V8 — Apply Link Harvester
+# Architect Job Collector V8.1 — Apply Link Harvester
 
 Single Sheet only: `Sheet1`.
 
-V8 is built for quantity with real apply links. It uses multiple public sources:
+V8.1 is built for quantity with real apply links. It uses multiple public sources:
 
 - Official career pages
 - Bing RSS search
