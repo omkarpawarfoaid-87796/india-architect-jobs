@@ -1,5 +1,5 @@
 """
-V4.4.2 Public ATS Discovery
+V4.4.3 Public ATS Discovery
 
 Reads trusted/active employer Sources, scans their public careers pages for
 public ATS links, and adds those boards back into Sources.
