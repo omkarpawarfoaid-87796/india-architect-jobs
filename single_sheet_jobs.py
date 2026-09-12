@@ -659,6 +659,7 @@ def collect_quantity_records(cfg):
     return records
 
 
+def discover_run_sources(cfg):
     sources = []
     seen = set()
 
