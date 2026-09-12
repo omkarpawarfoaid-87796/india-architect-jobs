@@ -1,5 +1,5 @@
 """
-V4.4.2 Fresh Job Discovery
+V4.4.3 Fresh Job Discovery
 
 Purpose:
 - Find newly surfaced architecture / built-environment job signals every few hours.
@@ -80,6 +80,15 @@ def blocked_signal_domain(url):
         "architizer.com",
         "dezeen.com",
         "designboom.com",
+        "nrd.adsttc.com",
+        "adsttc.com",
+        "aia.org",
+        "architecturelab.net",
+        "worldarchitecture.org",
+        "archinect.com",
+        "e-architect.com",
+        "stirworld.com",
+        "architectandinteriorsindia.com",
     }
 
     discovery_blocked = getattr(disc, "DISCOVERY_BLOCKED_DOMAINS", set()) or set()
@@ -220,10 +229,14 @@ def fresh_queries(cfg):
         # India-wide catches remote/national openings.
         queries.append(f'"{role}" hiring India "hours ago"')
         queries.append(f'"{role}" jobs India "today"')
+        queries.append(f'"{role}" "apply now" India')
+        queries.append(f'"{role}" "current openings" India')
+        queries.append(f'"{role}" "send your resume" India')
 
         # City-specific queries increase precision.
         for city in selected_cities:
             queries.append(f'"{role}" {city} India hiring')
+            queries.append(f'"{role}" {city} "apply now"')
 
     max_queries = int(cfg.get("fresh_max_queries_per_run", 24))
     return queries[:max_queries]
@@ -276,6 +289,116 @@ def official_resolution_queries(signal):
     return queries[:5]
 
 
+def fresh_signal_source_reject_reason(url, title="", snippet="", page_text=""):
+    """
+    V4.4.3 gate: fresh discovery must focus on hiring pages, not content pages.
+    """
+    url = core.canonical_url(url or "")
+    if not url:
+        return "Missing URL"
+    if blocked_signal_domain(url):
+        return "Blocked platform/domain"
+
+    d = core.domain(url).lower()
+    content_domains = {
+        "nrd.adsttc.com", "adsttc.com", "aia.org", "architecturelab.net",
+        "worldarchitecture.org", "archinect.com", "e-architect.com",
+        "stirworld.com", "architectandinteriorsindia.com",
+    }
+    if any(d == x or d.endswith("." + x) for x in content_domains):
+        return f"Content/institute/media domain: {d}"
+
+    path = (core.urlparse(url).path or "").lower()
+    combined = " ".join([compact(title), compact(snippet), compact(page_text)]).lower()
+
+    bad_path_bits = (
+        "/article/", "/articles/", "/news/", "/blog/", "/blogs/",
+        "/transcript", "/career-growth/", "/architect/types", "/guide/",
+        "/guides/", "/education/", "/resources/", "/project/", "/projects/",
+    )
+    hiring_terms = (
+        "apply now", "apply for this job", "job opening", "job openings",
+        "current opening", "current openings", "open position", "open positions",
+        "vacancy", "vacancies", "we are hiring", "send your resume",
+        "send your cv", "submit application", "submit your application",
+        "careers", "join our team", "hiring",
+    )
+    if any(bit in path for bit in bad_path_bits) and not any(term in combined for term in hiring_terms[:13]):
+        return "Article/content page without application signal"
+
+    # If the URL path has no hiring terms, require the page/snippet to strongly
+    # look like an application page before it can become a source.
+    path_hiring = re.search(r"/(careers?|jobs?|openings?|positions?|vacanc(?:y|ies)|join-us|work-with-us|apply|hiring)(/|$|-|_)", path)
+    if not path_hiring and not any(term in combined for term in hiring_terms):
+        return "No hiring/apply/career signal"
+
+    return ""
+
+
+def source_from_direct_job_page(result, signal, cfg):
+    """
+    V4.4.3 volume improvement: if a public official result is itself a valid
+    job page, add that exact page as a source. This lets new jobs enter Sheet1
+    without waiting for a separate careers-page resolver.
+    """
+    url = core.canonical_url(result.get("url") or "")
+    if not url or blocked_signal_domain(url) or core.is_blocked_domain(url, cfg):
+        return None
+
+    # Must look like a hiring/apply page from URL/search metadata first.
+    reason = fresh_signal_source_reject_reason(
+        url,
+        result.get("title", ""),
+        result.get("snippet", ""),
+        "",
+    )
+    if reason and "No hiring" not in reason:
+        return None
+
+    jobs, response = core.parse_page_for_jobs(url, cfg, title_hint=signal.get("role", ""))
+    if not response or not jobs:
+        return None
+
+    page_text = " ".join([j.get("description", "") for j in jobs])
+    reason = fresh_signal_source_reject_reason(
+        response.url,
+        result.get("title", ""),
+        result.get("snippet", ""),
+        page_text,
+    )
+    if reason:
+        return None
+
+    # Use the first validated job to fill source metadata. The collector will
+    # still re-scan and rebuild Sheet1 through the normal path.
+    job = jobs[0]
+    company = core.clean_text(job.get("company") or signal.get("company") or core.company_name_from_domain(response.url))
+    city = core.clean_text(job.get("city") or "")
+    state = core.clean_text(job.get("state") or "")
+
+    return {
+        "source_id": core._source_id(response.url),
+        "company_name": company,
+        "company_website": core.origin(response.url),
+        "career_url": core.canonical_url(response.url),
+        "city": city,
+        "state": state,
+        "source_type": "Fresh Direct Job Page",
+        "discovered_from": (
+            f"{signal.get('engine','Search')} direct job page | "
+            f"{signal.get('role','')} | {signal.get('company','Unknown employer')}"
+        ),
+        "first_discovered": core.now_ist().isoformat(timespec="seconds"),
+        "last_checked": "",
+        "last_success": "",
+        "jobs_found": str(len(jobs)),
+        "consecutive_failures": "0",
+        "status": "New",
+        "quality_reason": f"Verified public direct job page with {len(jobs)} valid job(s)",
+    }
+
+
+
 def source_from_official_result(result, signal, cfg):
     url = core.canonical_url(result.get("url") or "")
     if not url:
@@ -316,6 +439,15 @@ def source_from_official_result(result, signal, cfg):
     soup = BeautifulSoup(response.text, "html.parser")
     page_text = core.best_main_text(soup)
     low = page_text.lower()
+
+    reject_reason = fresh_signal_source_reject_reason(
+        candidate["career_url"],
+        result.get("title", ""),
+        result.get("snippet", ""),
+        page_text,
+    )
+    if reject_reason:
+        return None
 
     # Role-specific match is preferred. Generic career pages are still allowed
     # because the hourly collector will parse/validate each actual vacancy.
@@ -358,16 +490,17 @@ def resolve_signal(signal, cfg):
     # If search result itself is an official/non-blocked page, try it first.
     signal_url = signal.get("signal_url", "")
     if signal_url and not blocked_signal_domain(signal_url):
-        direct = source_from_official_result(
-            {
-                "title": signal.get("signal_title", ""),
-                "url": signal_url,
-                "snippet": signal.get("signal_snippet", ""),
-                "engine": signal.get("engine", ""),
-            },
-            signal,
-            cfg,
-        )
+        signal_result = {
+            "title": signal.get("signal_title", ""),
+            "url": signal_url,
+            "snippet": signal.get("signal_snippet", ""),
+            "engine": signal.get("engine", ""),
+        }
+        direct_job_page = source_from_direct_job_page(signal_result, signal, cfg)
+        if direct_job_page:
+            return direct_job_page
+
+        direct = source_from_official_result(signal_result, signal, cfg)
         if direct:
             return direct
 
@@ -375,6 +508,9 @@ def resolve_signal(signal, cfg):
     # Instead, resolve the company/role back to an official public source.
     for query in official_resolution_queries(signal):
         for result in disc.search_web(query, cfg):
+            source = source_from_direct_job_page(result, signal, cfg)
+            if source:
+                return source
             source = source_from_official_result(result, signal, cfg)
             if source:
                 return source
@@ -501,6 +637,16 @@ def self_test():
 
     assert disc.hard_block_reason("https://www.yellowpages.com/jobs")
     assert hasattr(disc, "official_company_quality")
+
+    assert fresh_signal_source_reject_reason("https://www.aia.org/career-growth/transcript", "Architect transcript", "", "")
+    assert fresh_signal_source_reject_reason("https://www.architecturelab.net/architect/types", "Types of architect", "", "")
+    assert fresh_signal_source_reject_reason("https://nrd.adsttc.com/1184508/story", "Architect", "", "")
+    assert not fresh_signal_source_reject_reason(
+        "https://examplearchitects.in/jobs/senior-architect",
+        "Senior Architect",
+        "Apply now for this job in Mumbai, India",
+        "Apply now Senior Architect Mumbai India",
+    )
 
     print("FRESH JOB DISCOVERY SELF TEST PASSED")
 
