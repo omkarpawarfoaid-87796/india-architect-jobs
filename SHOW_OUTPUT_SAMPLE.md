@@ -1,19 +1,17 @@
-# V6.2 expected output
+# V7 Output Sample
 
-`Sheet1` should contain only real job vacancies.
+Final output is only in `Sheet1` using the website schema:
 
-Rejected examples:
+```text
+external_id | title | description | status | employer_author | employer_email | employer_name | expiry_date | application_deadline_date | featured | urgent | filled | apply_type | apply_url | apply_email | phone | salary | max_salary | salary_type | address | location | category | type | tag | experience | gender | industry | qualification | career_level | video_url | logo_url
+```
 
-- ARCHITECTURAL Definition & Meaning
-- Wikipedia Architecture / Architect / Revit pages
-- Autodesk Revit product pages
-- BIM explainer articles
-- Architectural Digest content pages
-- HomeLane city/service pages
-- LinkedIn final URLs
+Example sources allowed in `apply_url`:
 
-Accepted examples:
+- `https://www.hafeezcontractor.com/careers`
+- `https://hingooarchitects.com/careers`
+- `https://www.naukri.com/job-listings-...`
+- `https://in.indeed.com/viewjob?...`
+- `https://www.linkedin.com/jobs/view/...`
 
-- Official employer career page jobs
-- Public Naukri/Indeed/Foundit/Shine/TimesJobs/Glassdoor job-detail pages only
-- Email-apply career-page jobs
+Only specific job detail links should appear. Generic search/content pages should not appear.

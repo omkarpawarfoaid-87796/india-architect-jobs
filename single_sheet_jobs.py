@@ -1,11 +1,11 @@
 """
-Single Sheet Job Finder V6
+Single Sheet Job Finder V7
 
 Goal:
 - One Google Sheet output only: Sheet1
 - No CandidateJobs, RejectedJobs, Sources, AutomationOutput, or _CollectorMeta required
-- Search wider, but publish only verified website-ready jobs
-- LinkedIn/job boards are signals only; final apply URL is never LinkedIn/login-gated
+- Search wider and publish real job-detail apply links from many sources
+- LinkedIn/job boards are allowed only when they are specific job detail pages, never search/login pages
 
 This script uses collector.py as a parsing/validation library, but it does NOT call
 collector.write_sheet() and does NOT use the old meta/source/report tabs.
@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 
 import collector as core
 
-VERSION = "V6.2-CLEAN-QUANTITY"
+VERSION = "V7-APPLY-LINK-MODE"
 ONE_SHEET_TAB = "Sheet1"
 
 # Final website schema. Do not add or remove columns without developer approval.
@@ -65,7 +65,7 @@ CONTENT_OR_DIRECTORY_DOMAINS = {
     "designboom.com", "www.designboom.com",
     "architizer.com", "www.architizer.com",
     "web.archive.org", "archive.org",
-    # V6.2: block educational/content/product/reference pages that V6.1 wrongly accepted.
+    # V7: block educational/content/product/reference pages that V7 wrongly accepted.
     "dictionary.cambridge.org", "www.dictionary.com", "dictionary.com", "merriam-webster.com", "www.merriam-webster.com",
     "britannica.com", "www.britannica.com",
     "wikipedia.org", "en.wikipedia.org", "en.m.wikipedia.org", "m.wikipedia.org",
@@ -79,7 +79,7 @@ CONTENT_OR_DIRECTORY_DOMAINS = {
     "architecturaldesigns.com", "www.architecturaldesigns.com",
 }
 
-FINAL_BLOCKED_DOMAINS = LINKEDIN_DOMAINS | CONTENT_OR_DIRECTORY_DOMAINS
+FINAL_BLOCKED_DOMAINS = CONTENT_OR_DIRECTORY_DOMAINS
 
 ROLE_KEYWORDS = (
     "architect", "architecture", "architectural", "interior designer",
@@ -153,7 +153,9 @@ def looks_like_reference_or_content_page(title='', description='', url=''):
 
 def has_vacancy_evidence(title='', description='', url='', query=''):
     text = f"{clean(title)} {clean(description)} {clean(url)} {clean(query)}".lower()
-    # For job-board detail URLs the URL pattern itself is strong evidence, but still require role relevance elsewhere.
+    # For job detail URLs the URL pattern itself is strong evidence, but still require role relevance elsewhere.
+    if is_linkedin_url(url) and is_specific_linkedin_job_url(url):
+        return True
     if is_public_job_board_url(url) and is_specific_job_board_job_url(url):
         return True
     score = sum(1 for t in VACANCY_TERMS if t in text)
@@ -207,9 +209,10 @@ def is_blocked_final_url(url, cfg=None):
     d = host(url)
     if not d:
         return True
-    # LinkedIn is never a final apply URL.
+    # V7: LinkedIn can be used as a final apply link only if it is a specific job detail URL.
+    # Never allow LinkedIn search/company/login pages.
     if is_linkedin_url(url):
-        return True
+        return not bool(cfg and cfg.get("allow_linkedin_job_apply_url", True)) or not is_specific_linkedin_job_url(url)
     # Content/directories are always blocked.
     for x in CONTENT_OR_DIRECTORY_DOMAINS:
         if d == x or d.endswith("." + x):
@@ -254,6 +257,20 @@ def hard_reject_reason(title="", description="", url="", employer=""):
     return ""
 
 
+def is_specific_linkedin_job_url(url):
+    u = (url or "").lower()
+    d = host(u)
+    path = urlparse(u).path.lower()
+    if not (d == "linkedin.com" or d.endswith(".linkedin.com")):
+        return False
+    # Accept only specific LinkedIn job pages like /jobs/view/1234567890.
+    # Reject /jobs/search, /company, /login, /feed, etc.
+    return "/jobs/view/" in path and not any(x in u for x in ("/jobs/search", "/login", "/signin", "trk=public_jobs_jobs-search"))
+
+
+def is_specific_public_job_detail_url(url):
+    return (is_linkedin_url(url) and is_specific_linkedin_job_url(url)) or (is_public_job_board_url(url) and is_specific_job_board_job_url(url))
+
 def is_specific_job_board_job_url(url):
     u = (url or "").lower()
     d = host(u)
@@ -285,7 +302,7 @@ def is_generic_job_search_page(title="", url="", snippet=""):
     )
     if any(x in text for x in generic_markers):
         # Direct job detail URLs can still pass; search/list pages cannot.
-        if not is_specific_job_board_job_url(url):
+        if not is_specific_public_job_detail_url(url):
             return True
     if any(x in u for x in ("/jobs-in-", "/job-search", "?k=", "?q=", "/jobs?q", "/search")):
         return True
@@ -344,7 +361,7 @@ def website_record_valid(record, cfg):
         return False, reason
     if not role_relevant(title, description):
         return False, "Role not relevant"
-    # V6.2: quantity mode must still look like a real vacancy, not only contain architecture words.
+    # V7: quantity mode must still look like a real vacancy, not only contain architecture words.
     # Keep email/official career-page rows that clearly list responsibilities/experience/qualification.
     if not has_vacancy_evidence(title, description, url, ""):
         return False, "No clear hiring/apply/vacancy evidence"
@@ -358,9 +375,9 @@ def website_record_valid(record, cfg):
         return False, "Expired"
     if not public_apply_ok(record, cfg):
         return False, "No public official apply method"
-    if url and is_linkedin_url(url):
-        return False, "Final apply URL is LinkedIn"
-    if url and is_signal_only_url(url) and not is_public_job_board_url(url):
+    if url and is_linkedin_url(url) and not (cfg.get("allow_linkedin_job_apply_url", True) and is_specific_linkedin_job_url(url)):
+        return False, "LinkedIn URL is not a specific job detail page"
+    if url and is_signal_only_url(url) and not (is_public_job_board_url(url) or is_linkedin_url(url)):
         return False, "Final apply URL is signal-only job board"
     if url and is_public_job_board_url(url) and not is_specific_job_board_job_url(url):
         return False, "Job-board URL is not a specific job detail page"
@@ -382,10 +399,9 @@ def website_record_from_job(job, cfg):
     web = core.website_record_from_meta(internal, cfg)
     web["external_id"] = ""
 
-    # Safety: never publish LinkedIn. Public job boards are allowed in V6.1
-    # Quantity Mode only if the URL is a specific public job detail page.
-    if is_linkedin_url(web.get("apply_url")):
-        return None, "LinkedIn final URL blocked"
+    # V7: LinkedIn is allowed only if it is a specific public job detail page.
+    if is_linkedin_url(web.get("apply_url")) and not (cfg.get("allow_linkedin_job_apply_url", True) and is_specific_linkedin_job_url(web.get("apply_url"))):
+        return None, "LinkedIn URL is not a specific job detail page"
     if is_public_job_board_url(web.get("apply_url")) and not is_specific_job_board_job_url(web.get("apply_url")):
         return None, "Generic job-board URL blocked"
     valid, reason = website_record_valid(web, cfg)
@@ -634,13 +650,15 @@ def quantity_signal_to_record(hit, cfg):
     title = clean(hit.get("title"))
     snippet = clean(BeautifulSoup(hit.get("snippet") or "", "html.parser").get_text(" "))
     query = clean(hit.get("query"))
-    if not url or is_linkedin_url(url):
-        return None, "LinkedIn URL blocked"
+    if not url:
+        return None, "Missing URL"
+    if is_linkedin_url(url) and not is_specific_linkedin_job_url(url):
+        return None, "LinkedIn URL is not a specific job detail page"
     if looks_like_reference_or_content_page(title, snippet, url):
         return None, "Reference/content/product page, not a job vacancy"
     if is_public_job_board_url(url) and not is_specific_job_board_job_url(url):
         return None, "Not a specific job-board detail URL"
-    if not is_public_job_board_url(url):
+    if not (is_public_job_board_url(url) or is_linkedin_url(url)):
         # Public web results are allowed only when they are career/job/opening URLs with vacancy evidence.
         if not career_like_url(url):
             return None, "Public web result is not a career/job URL"
@@ -663,7 +681,7 @@ def quantity_signal_to_record(hit, cfg):
     address = f"{city}, India" if city != "India" else "India"
     if is_blocked_final_url(url, cfg):
         return None, "Final URL blocked"
-    desc = snippet or f"{job_title} opening at {employer}. Public job source detected by V6.2 Clean Quantity Mode."
+    desc = snippet or f"{job_title} opening at {employer}. Public job source detected by V7 Apply Link Mode."
     exp = extract_experience(f"{title} {snippet}")
     tag_terms = []
     for term in cfg.get("skill_terms", []):
@@ -712,10 +730,10 @@ def collect_quantity_records(cfg):
     max_queries = int(cfg.get("v6_quantity_max_queries_per_run", 80))
     target = int(cfg.get("v6_quantity_target_records_per_run", 75))
     print("=" * 80)
-    print(f"V6.2 CLEAN QUANTITY MODE | queries={min(len(queries), max_queries)} target={target}")
+    print(f"V7 CLEAN QUANTITY MODE | queries={min(len(queries), max_queries)} target={target}")
     print("=" * 80)
     for query in queries[:max_queries]:
-        print(f"V6.2 JOB SEARCH | {query}")
+        print(f"V7 JOB SEARCH | {query}")
         for hit in bing_rss(query, cfg):
             u = norm_url(hit.get("url"))
             if not u or u in seen_urls:
@@ -724,9 +742,9 @@ def collect_quantity_records(cfg):
             rec, reason = quantity_signal_to_record(hit, cfg)
             if rec:
                 records.append(rec)
-                print(f"V6.2 ACCEPT SIGNAL JOB | {rec.get('employer_name')} | {rec.get('title')} | {u}")
+                print(f"V7 ACCEPT SIGNAL JOB | {rec.get('employer_name')} | {rec.get('title')} | {u}")
             else:
-                print(f"V6.2 REJECT SIGNAL | {hit.get('title')} | {reason}")
+                print(f"V7 REJECT SIGNAL | {hit.get('title')} | {reason}")
             if len(records) >= target:
                 return records
         time.sleep(float(cfg.get("v6_search_delay_seconds", 0.25)))
@@ -829,7 +847,7 @@ def build_single_sheet_records(existing_records, jobs, cfg, extra_records=None):
         valid, reason = website_record_valid(web, cfg)
         if not valid:
             rejected_count += 1
-            print(f"V6.2 REJECT EXTRA | {web.get('employer_name')} | {web.get('title')} | {reason}")
+            print(f"V7 REJECT EXTRA | {web.get('employer_name')} | {web.get('title')} | {reason}")
             continue
         key = web_key(web)
         if key not in by_key:
@@ -867,7 +885,7 @@ def run(dry_run=False):
 
     quantity_records = collect_quantity_records(cfg)
     print("=" * 80)
-    print(f"V6.2 clean quantity-mode public-source records before Sheet1 merge: {len(quantity_records)}")
+    print(f"V7 clean quantity-mode public-source records before Sheet1 merge: {len(quantity_records)}")
     print("=" * 80)
 
     if dry_run:
@@ -893,7 +911,7 @@ def run(dry_run=False):
     deleted = delete_old_pipeline_tabs(service, sheet_id, cfg)
 
     print("=" * 80)
-    print("V6.2 SINGLE SHEET CLEAN QUANTITY COMPLETE")
+    print("V7 SINGLE SHEET CLEAN QUANTITY COMPLETE")
     print(f"Sheet tab: {tab}")
     print(f"Existing kept: {stats['existing_kept']}")
     print(f"New/updated official accepted jobs: {stats['new_added']}")
@@ -932,8 +950,13 @@ def self_test():
         "employer_name": "ABC Architects",
         "apply_url": "https://www.linkedin.com/jobs/view/123",
     })
-    ok, reason = website_record_valid(linkedin, cfg)
-    assert not ok
+    ok, reason = website_record_valid(linkedin, {**cfg, "allow_linkedin_job_apply_url": True})
+    assert ok, reason
+
+    linkedin_search = dict(linkedin)
+    linkedin_search["apply_url"] = "https://www.linkedin.com/jobs/search?keywords=architect"
+    ok, reason = website_record_valid(linkedin_search, {**cfg, "allow_linkedin_job_apply_url": True})
+    assert not ok, reason
 
     content = dict(bad)
     content.update({
@@ -982,7 +1005,7 @@ def self_test():
     assert rows[0]["external_id"] == ""
     assert stats["rejected_count"] == 1
 
-    print("V6.2 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, LinkedIn blocked, public job-board detail URLs allowed for quantity mode, dedupe and blank external_id are working.")
+    print("V7 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, specific LinkedIn/job-board detail URLs allowed for apply-link quantity mode, dedupe and blank external_id are working.")
 
 
 def main():

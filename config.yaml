@@ -1,4 +1,4 @@
-# Architect Jobs Collector V6.2 — Single Sheet Clean Quantity Mode
+# Architect Jobs Collector V7 — Single Sheet Apply Link Mode
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -488,13 +488,13 @@ service_page_noise_reject_score: 6
 
 
 # -------------------------------------------------------------------
-# V6 Single Sheet Only
+# V7 Single Sheet Only
 # -------------------------------------------------------------------
 v6_single_sheet_only: true
 sheet_tab: Sheet1
 
-# V6 will not create or use CandidateJobs, RejectedJobs, Sources,
-# AutomationOutput, or _CollectorMeta. Set this true if you want V6 to delete
+# V7 will not create or use CandidateJobs, RejectedJobs, Sources,
+# AutomationOutput, or _CollectorMeta. Set this true if you want V7 to delete
 # old tabs created by earlier versions after a successful Sheet1 write.
 delete_old_pipeline_tabs: true
 old_pipeline_tabs_to_delete:
@@ -537,19 +537,40 @@ v6_search_queries:
 
 
 # -------------------------------------------------------------------
-# V6.2 Clean Quantity Mode
+# V7 Apply Link Quantity Mode
 # -------------------------------------------------------------------
-# This is the fix for low quantity. V6 official-only output stays clean but low.
-# V6.1 still writes only Sheet1, but it can publish real public job-detail URLs
-# from public job boards/direct web results. LinkedIn remains blocked as final URL.
+# V7 fixes quantity by allowing specific public job-detail apply URLs from LinkedIn, Naukri, Indeed, Foundit, Shine, TimesJobs, Glassdoor and official career pages.
+# It still writes only Sheet1. It rejects search pages, content pages, product pages, service pages and fake rows.
 v6_quantity_mode_enabled: true
 allow_public_job_board_apply_url: true
-v6_quantity_target_records_per_run: 80
-v6_quantity_max_queries_per_run: 90
-v6_results_per_query: 10
+allow_linkedin_job_apply_url: true
+v6_quantity_target_records_per_run: 120
+v6_quantity_max_queries_per_run: 140
+v6_results_per_query: 12
 
 v6_quantity_search_queries:
   # Strict job detail pages only. This avoids dictionary, article, BIM guide, Wikipedia, product pages.
+
+  # LinkedIn specific job pages are allowed as apply links in V7.
+  - 'site:linkedin.com/jobs/view "Junior Architect" "India"'
+  - 'site:linkedin.com/jobs/view "Architect" "India"'
+  - 'site:linkedin.com/jobs/view "Senior Architect" "India"'
+  - 'site:linkedin.com/jobs/view "Project Architect" "India"'
+  - 'site:linkedin.com/jobs/view "Design Architect" "India"'
+  - 'site:linkedin.com/jobs/view "Interior Designer" "India"'
+  - 'site:linkedin.com/jobs/view "Interior Architect" "India"'
+  - 'site:linkedin.com/jobs/view "BIM Architect" "India"'
+  - 'site:linkedin.com/jobs/view "BIM Coordinator" "India"'
+  - 'site:linkedin.com/jobs/view "Revit Architect" "India"'
+  - 'site:linkedin.com/jobs/view "3D Visualizer" "India"'
+  - 'site:linkedin.com/jobs/view "Architectural Draftsman" "India"'
+  - 'site:linkedin.com/jobs/view "Landscape Architect" "India"'
+  - 'site:linkedin.com/jobs/view "Urban Designer" "India"'
+  - 'site:linkedin.com/jobs/view "Junior Architect" "Mumbai"'
+  - 'site:linkedin.com/jobs/view "Interior Designer" "Mumbai"'
+  - 'site:linkedin.com/jobs/view "Architect" "Delhi"'
+  - 'site:linkedin.com/jobs/view "Interior Designer" "Bengaluru"'
+  - 'site:linkedin.com/jobs/view "BIM" "Hyderabad"'
   - 'site:naukri.com/job-listings "Junior Architect" "Mumbai"'
   - 'site:naukri.com/job-listings "Architect" "Mumbai"'
   - 'site:naukri.com/job-listings "Senior Architect" "Mumbai"'
@@ -596,3 +617,21 @@ v6_quantity_search_queries:
   - 'site:timesjobs.com/candidate/JobDetailView.html "Interior Designer" "India"'
   - 'site:glassdoor.co.in/job-listing "Architect" "India"'
   - 'site:glassdoor.co.in/job-listing "Interior Designer" "India"'
+
+  - 'site:naukri.com/job-listings "Project Architect" "India"'
+  - 'site:naukri.com/job-listings "Design Architect" "India"'
+  - 'site:naukri.com/job-listings "Interior Architect" "India"'
+  - 'site:naukri.com/job-listings "Revit Architect" "India"'
+  - 'site:naukri.com/job-listings "BIM Coordinator" "India"'
+  - 'site:naukri.com/job-listings "Landscape Architect" "India"'
+  - 'site:naukri.com/job-listings "Urban Designer" "India"'
+  - 'site:in.indeed.com/viewjob "Project Architect" "India"'
+  - 'site:in.indeed.com/viewjob "Design Architect" "India"'
+  - 'site:in.indeed.com/viewjob "Interior Architect" "India"'
+  - 'site:in.indeed.com/viewjob "BIM Coordinator" "India"'
+  - 'site:foundit.in/job "Project Architect" "India"'
+  - 'site:foundit.in/job "Design Architect" "India"'
+  - 'site:foundit.in/job "Revit Architect" "India"'
+  - 'site:timesjobs.com/candidate/JobDetailView.html "BIM" "India"'
+  - 'site:timesjobs.com/candidate/JobDetailView.html "3D Visualizer" "India"'
+
