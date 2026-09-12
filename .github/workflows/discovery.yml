@@ -1,4 +1,4 @@
-name: Daily Architect Source Discovery V4.4.6
+name: Daily Architect Source Discovery V5
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     - cron: "35 20 * * *"
 
 concurrency:
-  group: architect-source-discovery-v446
+  group: architect-source-discovery-v5
   cancel-in-progress: false
 
 jobs:
@@ -57,5 +57,7 @@ jobs:
           GOOGLE_SHEET_TAB: Sheet1
           GOOGLE_META_TAB: _CollectorMeta
           GOOGLE_SOURCES_TAB: Sources
+          GOOGLE_CANDIDATE_TAB: CandidateJobs
+          GOOGLE_REJECTED_TAB: RejectedJobs
           GOOGLE_REPORT_TAB: AutomationOutput
         run: python report_output.py --workflow daily-source-discovery

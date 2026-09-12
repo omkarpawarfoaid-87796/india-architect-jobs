@@ -1,4 +1,4 @@
-name: Fresh Architect Job Discovery V4.4.6
+name: Fresh Architect Job Discovery V5
 
 on:
   workflow_dispatch:
@@ -6,13 +6,13 @@ on:
     - cron: "42 */3 * * *"
 
 concurrency:
-  group: fresh-architect-job-discovery-v446
+  group: fresh-architect-job-discovery-v5
   cancel-in-progress: false
 
 jobs:
   fresh-jobs:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -32,6 +32,18 @@ jobs:
 
       - name: Validate fresh job discovery
         run: python fresh_jobs.py --self-test
+
+      - name: Validate CandidateJobs pipeline
+        run: python candidate_jobs.py --self-test
+
+      - name: Build CandidateJobs and RejectedJobs
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SOURCES_TAB: Sources
+          GOOGLE_CANDIDATE_TAB: CandidateJobs
+          GOOGLE_REJECTED_TAB: RejectedJobs
+        run: python candidate_jobs.py
 
       - name: Discover fresh public job sources
         env:
@@ -69,5 +81,7 @@ jobs:
           GOOGLE_SHEET_TAB: Sheet1
           GOOGLE_META_TAB: _CollectorMeta
           GOOGLE_SOURCES_TAB: Sources
+          GOOGLE_CANDIDATE_TAB: CandidateJobs
+          GOOGLE_REJECTED_TAB: RejectedJobs
           GOOGLE_REPORT_TAB: AutomationOutput
         run: python report_output.py --workflow fresh-job-discovery

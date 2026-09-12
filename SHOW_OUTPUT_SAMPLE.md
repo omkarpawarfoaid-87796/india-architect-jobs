@@ -1,11 +1,15 @@
-# V4.4.6 Show Output
+# V5 Show Output Sample
 
-Open Google Sheet tab `AutomationOutput`.
+After running Candidate Job Pipeline V5, show these tabs:
 
-Check:
-- Website-ready open jobs
-- Cleaned fake rows
-- Active sources
-- Rejected sources
+1. AutomationOutput
+2. CandidateJobs
+3. RejectedJobs
+4. Sheet1
 
-Good result: no HomeLane service rows and no AECOM Australia & New Zealand row in Sheet1.
+Expected V5 story:
+
+- Sheet1 remains clean and verified.
+- CandidateJobs shows volume.
+- RejectedJobs proves fake rows are filtered.
+- LinkedIn is used only as a signal, never as website apply_url.

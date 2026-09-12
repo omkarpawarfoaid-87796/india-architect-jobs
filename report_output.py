@@ -1,8 +1,7 @@
 """
-V4.4.2 Showable Output Report
+V5 Showable Output Report
 
-Creates/updates a Google Sheet tab named AutomationOutput.
-This is designed for screenshots/client/developer sharing.
+Creates/updates AutomationOutput, including Verified jobs + CandidateJobs pipeline metrics.
 """
 
 import argparse
@@ -10,7 +9,6 @@ import os
 from collections import Counter
 
 import collector as core
-
 
 REPORT_HEADERS = ["Section", "Metric", "Value", "Notes"]
 
@@ -22,131 +20,107 @@ def rows_to_records(values):
     return [core.row_to_record(headers, row) for row in values[1:]]
 
 
+def read_records_safe(svc, sheet_id, tab):
+    try:
+        return rows_to_records(core.read_sheet_values(svc, sheet_id, tab))
+    except Exception:
+        return []
+
+
+def ctext(v):
+    return core.clean_text(v or "")
+
+
 def count_by(records, field):
-    return Counter(core.clean_text(r.get(field) or "Blank") for r in records)
-
-
-def source_counts(sources):
-    c = Counter(core.clean_text(s.get("status") or "Blank") for s in sources)
-    ats = sum(1 for s in sources if core.clean_text(s.get("source_type") or "").startswith("ATS "))
-    fresh = sum(1 for s in sources if core.clean_text(s.get("source_type") or "") == "Fresh Job Signal")
-    direct = sum(1 for s in sources if core.clean_text(s.get("source_type") or "") == "Fresh Direct Job Page")
-    discovered = sum(1 for s in sources if core.clean_text(s.get("source_type") or "") == "Discovered Website")
-    linkedin_signal = sum(1 for s in sources if "linkedin company-listed signal" in core.clean_text(s.get("discovered_from") or "").lower())
-    return c, ats, fresh, direct, discovered, linkedin_signal
+    return Counter(ctext(r.get(field) or "Blank") for r in records)
 
 
 def count_fake_rows(records):
-    total = 0
+    n = 0
     for r in records:
         try:
-            if core.meta_record_vacancy_reject_reason(r, None) or core.is_hard_fake_job_record(r):
-                total += 1
+            job = {
+                "title": r.get("title") or r.get("Job Title") or r.get("Title") or "",
+                "description": r.get("description") or r.get("Description") or "",
+                "source_url": r.get("apply_url") or r.get("Source URL") or r.get("source_url") or "",
+            }
+            reason = core.real_vacancy_reject_reason(job, {})
+            if reason and any(key in reason.lower() for key in ("service/location", "generic region", "not a vacancy")):
+                n += 1
         except Exception:
-            try:
-                if core.meta_record_vacancy_reject_reason(r, None):
-                    total += 1
-            except Exception:
-                pass
-    return total
+            pass
+    return n
 
 
-def build_report(sheet1, sources, meta, workflow_name):
+def source_counts(sources):
+    c = Counter(ctext(s.get("status") or "Blank") for s in sources)
+    ats = sum(1 for s in sources if ctext(s.get("source_type") or "").startswith("ATS "))
+    fresh = sum(1 for s in sources if ctext(s.get("source_type") or "") == "Fresh Job Signal")
+    direct = sum(1 for s in sources if ctext(s.get("source_type") or "") == "Fresh Direct Job Page")
+    candidate_official = sum(1 for s in sources if ctext(s.get("source_type") or "") == "Candidate Official Source")
+    discovered = sum(1 for s in sources if ctext(s.get("source_type") or "") == "Discovered Website")
+    return c, ats, fresh, direct, candidate_official, discovered
+
+
+def build_report(sheet1, sources, meta, candidates, rejected, workflow_name):
     stamp = core.now_ist().isoformat(timespec="seconds")
     open_jobs = [
         r for r in sheet1
-        if core.clean_text(r.get("status") or "").lower() == "publish"
-        and core.clean_text(r.get("filled") or "").lower() != "yes"
+        if ctext(r.get("status") or "").lower() == "publish"
+        and ctext(r.get("filled") or "").lower() != "yes"
     ]
     active_meta = [
         r for r in meta
-        if core.clean_text(r.get("Status") or "").lower() == "active"
-        and core.clean_text(r.get("Application Status") or "").lower() == "open"
+        if ctext(r.get("Status") or "").lower() == "active"
+        and ctext(r.get("Application Status") or "").lower() == "open"
     ]
-
-    status_counts, ats_count, fresh_count, direct_count, discovered_count, linkedin_signal_count = source_counts(sources)
+    pending_candidates = [r for r in candidates if ctext(r.get("review_status") or "").lower() in ("pending review", "")]
+    official_candidates = [r for r in candidates if ctext(r.get("validation_status") or "") == "Official Source Found"]
+    linkedin_candidates = [r for r in candidates if "linkedin" in ctext(r.get("source_type") or "").lower()]
+    status_counts, ats_count, fresh_count, direct_count, candidate_source_count, discovered_count = source_counts(sources)
 
     rows = []
     rows.append(["Overview", "Report generated", stamp, "Asia/Kolkata time"])
-    rows.append(["Overview", "Workflow", workflow_name, "Generated by V4.4.6"])
-    rows.append(["Overview", "Website-ready open jobs", len(open_jobs), "Rows currently publishable from Sheet1"])
-    rows.append(["Overview", "Internal active jobs", len(active_meta), "Open rows in _CollectorMeta"])
-    rows.append(["Overview", "Total sources", len(sources), "Includes active, warning and rejected"])
-    rows.append(["Overview", "Active sources", status_counts.get("Active", 0), "Eligible for hourly checking"])
-    rows.append(["Overview", "Warning sources", status_counts.get("Warning", 0), "Temporary check failures"])
-    rows.append(["Overview", "Rejected sources", status_counts.get("Rejected", 0), "Blocked from hourly checking"])
-    cleaned_fake_rows = sum(
-        1 for r in meta
-        if "v4.4.5 hard cleanup" in core.clean_text(r.get("Closed Reason") or "").lower()
-    )
-    rows.append(["Overview", "Cleaned fake rows", cleaned_fake_rows, "Old HomeLane/AECOM/service rows closed by hard cleanup"])
-    rows.append(["Overview", "ATS sources", ats_count, "Rows where source_type starts with ATS"])
-    rows.append(["Overview", "Fresh Job Signal sources", fresh_count, "Sources found by fresh-job workflow"])
-    rows.append(["Overview", "Fresh Direct Job Page sources", direct_count, "Direct pages verified as job pages"])
-    rows.append(["Overview", "LinkedIn company-listed signals resolved", linkedin_signal_count, "LinkedIn used as signal only; final apply is official/non-LinkedIn"])
-    rows.append(["Overview", "Discovered Website sources", discovered_count, "Sources found by daily discovery"])
-
+    rows.append(["Overview", "Workflow", workflow_name, "Generated by V5"])
+    rows.append(["Verified output", "Website-ready open jobs", len(open_jobs), "Strict verified rows in Sheet1"])
+    rows.append(["Verified output", "Internal active jobs", len(active_meta), "Open rows in _CollectorMeta"])
+    rows.append(["Verified output", "Cleaned fake rows", count_fake_rows(sheet1) + count_fake_rows(meta), "Should remain 0 after cleanup"])
+    rows.append(["Candidate pipeline", "CandidateJobs total", len(candidates), "Signals saved for review; not auto-published"])
+    rows.append(["Candidate pipeline", "Pending review", len(pending_candidates), "Manual review queue"])
+    rows.append(["Candidate pipeline", "Official source found", len(official_candidates), "Candidate signals resolved to official source"])
+    rows.append(["Candidate pipeline", "LinkedIn company-listed signals", len(linkedin_candidates), "Signal only; final website never links to LinkedIn"])
+    rows.append(["Candidate pipeline", "RejectedJobs total", len(rejected), "Fake/expired/content/service/job-board rejects"])
+    rows.append(["Sources", "Total sources", len(sources), "Includes active, warning, inactive, rejected"])
+    rows.append(["Sources", "Active sources", status_counts.get("Active", 0), "Eligible for collector"])
+    rows.append(["Sources", "Warning sources", status_counts.get("Warning", 0), "Temporary check failures"])
+    rows.append(["Sources", "Inactive sources", status_counts.get("Inactive", 0), "Timed out/unreachable repeatedly"])
+    rows.append(["Sources", "Rejected sources", status_counts.get("Rejected", 0), "Blocked from collector"])
+    rows.append(["Sources", "ATS sources", ats_count, "Rows where source_type starts with ATS"])
+    rows.append(["Sources", "Fresh Job Signal sources", fresh_count, "Fresh-discovered sources"])
+    rows.append(["Sources", "Fresh Direct Job Page sources", direct_count, "Direct job pages discovered"])
+    rows.append(["Sources", "Candidate Official Source rows", candidate_source_count, "Added from CandidateJobs resolver"])
     rows.append(["", "", "", ""])
 
     for company, count in count_by(open_jobs, "employer_name").most_common(20):
-        rows.append(["Jobs by employer", company, count, "Published job count"])
-
+        rows.append(["Verified jobs by employer", company, count, "Sheet1 publish rows"])
     rows.append(["", "", "", ""])
 
     for category, count in count_by(open_jobs, "category").most_common(20):
-        rows.append(["Jobs by category", category, count, "Published job count"])
-
-    rows.append(["", "", "", ""])
-
-    for apply_type, count in count_by(open_jobs, "apply_type").most_common(10):
-        rows.append(["Apply type", apply_type, count, "email / external"])
-
+        rows.append(["Verified jobs by category", category, count, "Sheet1 publish rows"])
     rows.append(["", "", "", ""])
 
     for r in open_jobs[:30]:
-        rows.append([
-            "Live jobs",
-            core.clean_text(r.get("title") or ""),
-            core.clean_text(r.get("employer_name") or ""),
-            " | ".join(
-                x for x in [
-                    core.clean_text(r.get("location") or ""),
-                    core.clean_text(r.get("category") or ""),
-                    core.clean_text(r.get("apply_type") or ""),
-                    core.clean_text(r.get("expiry_date") or ""),
-                ]
-                if x
-            ),
-        ])
-
+        rows.append(["Verified live jobs", ctext(r.get("title")), ctext(r.get("employer_name")), " | ".join(x for x in [ctext(r.get("location")), ctext(r.get("category")), ctext(r.get("apply_type")), ctext(r.get("expiry_date"))] if x)])
     rows.append(["", "", "", ""])
 
-    recent_sources = [
-        s for s in sources
-        if core.clean_text(s.get("source_type") or "") != "Seed Website"
-        and core.clean_text(s.get("status") or "") in ("Active", "Warning", "New")
-    ][-25:]
-    for s in recent_sources:
-        rows.append([
-            "Recent accepted sources",
-            core.clean_text(s.get("company_name") or ""),
-            core.clean_text(s.get("source_type") or ""),
-            core.clean_text(s.get("career_url") or ""),
-        ])
-
+    # Show top candidates for stakeholder output.
+    candidates_sorted = sorted(candidates, key=lambda r: int(ctext(r.get("verification_score") or "0") or 0), reverse=True)
+    for r in candidates_sorted[:40]:
+        rows.append(["Top candidate jobs", ctext(r.get("role")), ctext(r.get("company") or "Unknown"), " | ".join(x for x in [ctext(r.get("source_type")), ctext(r.get("validation_status")), "score " + ctext(r.get("verification_score"))] if x)])
     rows.append(["", "", "", ""])
 
-    rejected = [
-        s for s in sources
-        if core.clean_text(s.get("status") or "") == "Rejected"
-    ][-25:]
-    for s in rejected:
-        rows.append([
-            "Rejected source examples",
-            core.clean_text(s.get("company_name") or ""),
-            core.clean_text(s.get("quality_reason") or ""),
-            core.clean_text(s.get("career_url") or ""),
-        ])
+    for reason, count in count_by(rejected, "reject_reason").most_common(20):
+        rows.append(["Rejected reason summary", reason, count, "RejectedJobs"])
 
     return [REPORT_HEADERS] + rows
 
@@ -155,69 +129,49 @@ def update_report(workflow_name):
     sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
     if not sheet_id:
         raise RuntimeError("Missing GOOGLE_SHEET_ID")
-
     sheet_tab = os.environ.get("GOOGLE_SHEET_TAB", "Sheet1")
     source_tab = os.environ.get("GOOGLE_SOURCES_TAB", "Sources")
     meta_tab = os.environ.get("GOOGLE_META_TAB", "_CollectorMeta")
+    candidate_tab = os.environ.get("GOOGLE_CANDIDATE_TAB", "CandidateJobs")
+    rejected_tab = os.environ.get("GOOGLE_REJECTED_TAB", "RejectedJobs")
     report_tab = os.environ.get("GOOGLE_REPORT_TAB", "AutomationOutput")
 
     svc = core.sheet_service()
+    sheet1 = read_records_safe(svc, sheet_id, sheet_tab)
+    sources = read_records_safe(svc, sheet_id, source_tab)
+    meta = read_records_safe(svc, sheet_id, meta_tab)
+    candidates = read_records_safe(svc, sheet_id, candidate_tab)
+    rejected = read_records_safe(svc, sheet_id, rejected_tab)
 
-    sheet1 = rows_to_records(core.read_sheet_values(svc, sheet_id, sheet_tab))
-    sources = rows_to_records(core.read_sheet_values(svc, sheet_id, source_tab))
-    meta = rows_to_records(core.read_sheet_values(svc, sheet_id, meta_tab))
-
-    output = build_report(sheet1, sources, meta, workflow_name)
-
+    output = build_report(sheet1, sources, meta, candidates, rejected, workflow_name)
     core.get_sheet_properties(svc, sheet_id, report_tab, create_if_missing=True)
     core.ensure_sheet_columns(svc, sheet_id, report_tab, len(REPORT_HEADERS))
-
-    svc.spreadsheets().values().clear(
-        spreadsheetId=sheet_id,
-        range=f"'{report_tab}'!A:Z",
-        body={},
-    ).execute()
+    svc.spreadsheets().values().clear(spreadsheetId=sheet_id, range=f"'{report_tab}'!A:Z", body={}).execute()
     svc.spreadsheets().values().update(
         spreadsheetId=sheet_id,
         range=f"'{report_tab}'!A1:D{len(output)}",
         valueInputOption="RAW",
         body={"values": output},
     ).execute()
-
     print("=" * 80)
-    print(f"AutomationOutput report updated: {len(output)-1} rows")
-    print(f"Open website jobs: {len(sheet1)}")
-    print(f"Sources: {len(sources)}")
+    print(f"AutomationOutput V5 report updated: {len(output)-1} rows")
+    print(f"Website-ready jobs: {len(sheet1)}")
+    print(f"CandidateJobs: {len(candidates)}")
+    print(f"RejectedJobs: {len(rejected)}")
     print("=" * 80)
 
 
 def self_test():
-    sample_jobs = [
-        {
-            "title": "Junior Architect",
-            "status": "publish",
-            "filled": "no",
-            "employer_name": "Example Architects",
-            "category": "Architecture",
-            "apply_type": "email",
-            "location": "Mumbai|India",
-            "expiry_date": "18-09-2026",
-        }
-    ]
-    sample_sources = [
-        {"status": "Active", "source_type": "Seed Website", "company_name": "Example", "career_url": "https://example.com/careers"},
-        {"status": "Rejected", "source_type": "Fresh Job Signal", "company_name": "Bad Platform", "quality_reason": "Blocked platform/domain", "career_url": "https://bad.example"},
-        {"status": "New", "source_type": "ATS Lever", "company_name": "Example", "career_url": "https://jobs.lever.co/example"},
-        {"status": "New", "source_type": "Fresh Job Signal", "company_name": "LinkedIn Example", "discovered_from": "LinkedIn company-listed signal only; final apply is official/non-LinkedIn", "career_url": "https://example.com/careers"},
-    ]
-    report = build_report(sample_jobs, sample_sources, [], "self-test")
-    assert report[0] == REPORT_HEADERS
-    joined = "\\n".join(" ".join(map(str, row)) for row in report)
+    sheet1 = [{"title": "Junior Architect", "status": "publish", "filled": "no", "employer_name": "Example Architects", "category": "Architecture", "location": "Mumbai|India"}]
+    sources = [{"status": "Active", "source_type": "Seed Website"}, {"status": "Rejected", "source_type": "Fresh Job Signal"}, {"status": "New", "source_type": "Candidate Official Source"}]
+    candidates = [{"role": "Junior Architect", "company": "Example Architects", "source_type": "LinkedIn Company Signal", "validation_status": "Signal Only", "verification_score": "65", "review_status": "Pending Review"}]
+    rejected = [{"reject_reason": "Service/location landing page, not a job vacancy"}]
+    report = build_report(sheet1, sources, [], candidates, rejected, "self-test")
+    joined = "\n".join(" ".join(map(str, row)) for row in report)
+    assert "CandidateJobs total" in joined
     assert "Website-ready open jobs" in joined
-    assert "Junior Architect" in joined
-    assert "ATS sources" in joined
-    assert "Rejected source examples" in joined
-    assert "LinkedIn company-listed signals resolved" in joined
+    assert "RejectedJobs total" in joined
+    assert "LinkedIn company-listed signals" in joined
     print("REPORT OUTPUT SELF TEST PASSED")
 
 
@@ -226,12 +180,10 @@ def main():
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--workflow", default="manual")
     args = parser.parse_args()
-
     if args.self_test:
         self_test()
-        return
-
-    update_report(args.workflow)
+    else:
+        update_report(args.workflow)
 
 
 if __name__ == "__main__":

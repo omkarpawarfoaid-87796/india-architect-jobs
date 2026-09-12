@@ -1,18 +1,18 @@
-name: Hourly Architect Job Collector V5
+name: Candidate Job Pipeline V5
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "7 */6 * * *"
 
 concurrency:
-  group: architect-job-collector-v5
+  group: candidate-job-pipeline-v5
   cancel-in-progress: false
 
 jobs:
-  collect:
+  candidate-jobs:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -27,22 +27,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Validate V5 collector rules
-        run: python collector.py --self-test
+      - name: Validate CandidateJobs pipeline
+        run: python candidate_jobs.py --self-test
 
-      - name: Run V5 verified collector
+      - name: Build CandidateJobs and RejectedJobs
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GOOGLE_SHEET_TAB: Sheet1
-          GOOGLE_META_TAB: _CollectorMeta
           GOOGLE_SOURCES_TAB: Sources
-        run: python collector.py
+          GOOGLE_CANDIDATE_TAB: CandidateJobs
+          GOOGLE_REJECTED_TAB: RejectedJobs
+        run: python candidate_jobs.py
 
       - name: Validate showable output report
         run: python report_output.py --self-test
 
-      - name: Update showable automation output
+      - name: Update showable candidate output
         env:
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -52,4 +52,4 @@ jobs:
           GOOGLE_CANDIDATE_TAB: CandidateJobs
           GOOGLE_REJECTED_TAB: RejectedJobs
           GOOGLE_REPORT_TAB: AutomationOutput
-        run: python report_output.py --workflow hourly-collector
+        run: python report_output.py --workflow candidate-job-pipeline

@@ -35,7 +35,7 @@ DISCOVERY_BLOCKED_DOMAINS = {
     "architizer.com",
     "dezeen.com",
     "designboom.com",
-    # V4.4.6 article / institute / education / content pages that create false fresh signals.
+    # V5 article / institute / education / content pages that create false fresh signals.
     "nrd.adsttc.com",
     "adsttc.com",
     "aia.org",
@@ -230,7 +230,7 @@ def load_config():
 
 
 def fetch(url, cfg):
-    # V4.4.6 hotfix: fetch must not reference search-result variables.
+    # V5 hotfix: fetch must not reference search-result variables.
     if not url:
         return None
     if hard_block_reason(url) or core.is_blocked_domain(url, cfg):
@@ -242,7 +242,7 @@ def fetch(url, cfg):
             timeout=int(cfg.get("request_timeout_seconds", 15)),
             headers={
                 "User-Agent": (
-                    "ArchitectJobsDiscovery/4.4.6.2 "
+                    "ArchitectJobsDiscovery/5.0.2 "
                     "(public-source discovery; no authentication bypass)"
                 ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -524,7 +524,7 @@ def homepage_identity_context(url, cfg):
 
 def careerish_url(url):
     """
-    V4.4.6: stricter than older versions.
+    V5: stricter than older versions.
 
     Accept real hiring paths such as /careers, /career, /jobs, /join-us,
     /work-with-us, /openings. Do not treat content paths such as
@@ -918,7 +918,7 @@ def audit_existing_discovered_sources(service, sheet_id, tab, cfg):
         if source_type not in ("Discovered Website", "Fresh Job Signal", "Fresh Direct Job Page"):
             continue
 
-        # V4.4.6: remove previously accepted service/direct fake sources.
+        # V5: remove previously accepted service/direct fake sources.
         source_reason = core.source_page_hard_reject_reason(
             url,
             clean(rec.get("company_name") or ""),

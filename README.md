@@ -1,35 +1,68 @@
-# India Architect Jobs Collector V4.4.6
+# India Architect Jobs Automation V5
 
-V4.4.6 is the timeout-safe cleanup build.
+V5 changes the strategy from “force everything into Sheet1” to a professional two-layer pipeline.
 
-## Fixed
+## Main idea
 
-- Prevents hourly collector from running for 1+ hour.
-- Blocks HomeLane service/city landing pages before fetching.
-- Blocks AECOM Australia & New Zealand / early-career bucket pages.
-- Limits detail pages per source.
-- Lowers request timeout to 8 seconds.
-- Reduces hourly workflow timeout to 20 minutes.
-- Rebuilds Sheet1 clean from verified rows only.
+- `Sheet1` = only verified website-ready jobs.
+- `CandidateJobs` = high-volume job signals from LinkedIn/search/job boards/official pages for review.
+- `RejectedJobs` = fake, content, service-page, expired or invalid signals.
+- `AutomationOutput` = stakeholder dashboard summary.
 
-## Replace these files
+## Why V5 is needed
 
-- collector.py
-- discovery.py
-- fresh_jobs.py
-- ats_discovery.py
-- report_output.py
-- config.yaml
-- .github/workflows/hourly.yml
-- .github/workflows/discovery.yml
-- .github/workflows/fresh_jobs.yml
+V4.4.6 is stable and clean, but strict verification keeps Sheet1 around 4–7 jobs. V5 keeps Sheet1 clean while creating a larger visible candidate pipeline.
 
-Keep requirements.txt.
+## New file
 
-## Run first
+- `candidate_jobs.py`
 
-1. Hourly Architect Job Collector V4.4.6
-2. Fresh Architect Job Discovery V4.4.6
-3. Hourly Architect Job Collector V4.4.6
+## New Google Sheet tabs
 
-Expected: Hourly must finish under 20 minutes and Sheet1 must not contain HomeLane city pages or AECOM ANZ page.
+- `CandidateJobs`
+- `RejectedJobs`
+
+## LinkedIn rule
+
+LinkedIn is used only as a company-listed search signal. The website never sends users to LinkedIn.
+
+LinkedIn signal flow:
+
+1. Read public search result metadata only.
+2. Extract role and company.
+3. Try to resolve official company careers/apply page.
+4. Save into CandidateJobs.
+5. Only official/non-LinkedIn sources can become final website jobs.
+
+## Workflows
+
+1. `Hourly Architect Job Collector V5`
+   - Updates only verified Sheet1.
+2. `Fresh Architect Job Discovery V5`
+   - Builds CandidateJobs, fresh sources, ATS sources, then refreshes Sheet1.
+3. `Daily Architect Source Discovery V5`
+   - Finds new official career sources.
+4. `Candidate Job Pipeline V5`
+   - Builds only CandidateJobs and RejectedJobs.
+
+## First run order
+
+1. Candidate Job Pipeline V5
+2. Fresh Architect Job Discovery V5
+3. Hourly Architect Job Collector V5
+
+## What to show
+
+Open `AutomationOutput` and show:
+
+- Website-ready open jobs
+- CandidateJobs total
+- Pending review
+- Official source found
+- LinkedIn company-listed signals
+- RejectedJobs total
+- Rejected reason summary
+
+## Important
+
+Do not connect CandidateJobs directly to the website. Your web developer should import only Sheet1.

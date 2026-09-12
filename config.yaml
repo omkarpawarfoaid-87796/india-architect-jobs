@@ -1,4 +1,4 @@
-# Architect Jobs Collector V4.4.6 — ATS Coverage + Showable Output Report
+# Architect Jobs Collector V5 — ATS Coverage + Showable Output Report
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -385,7 +385,7 @@ smartrecruiters_detail_limit: 40
 
 
 # -------------------------------------------------------------------
-# V4.4.6 stronger platform/CDN blocking
+# V5 stronger platform/CDN blocking
 # -------------------------------------------------------------------
 platform_blocked_domains:
   - architectandinteriorsindia.com
@@ -441,7 +441,7 @@ ats_search_patterns:
 report_tab: AutomationOutput
 
 
-# V4.4.6 fresh-job volume controls
+# V5 fresh-job volume controls
 # Fresh discovery now tries direct official job pages as sources, but only when
 # the page has hiring/apply/career signals and passes the normal job validator.
 direct_job_page_min_hiring_terms: 1
@@ -449,14 +449,14 @@ fresh_direct_job_pages_enabled: true
 
 
 # -------------------------------------------------------------------
-# V4.4.6 hard cleanup
+# V5 hard cleanup
 # -------------------------------------------------------------------
 v445_hard_cleanup_enabled: true
 service_page_noise_reject_score: 5
 
 
 # -------------------------------------------------------------------
-# V4.4.6 timeout-safe cleanup overrides
+# V5 timeout-safe cleanup overrides
 # -------------------------------------------------------------------
 request_timeout_seconds: 8
 request_delay_seconds: 0.05
@@ -469,3 +469,21 @@ source_future_timeout_seconds: 45
 revalidate_limit_per_run: 20
 max_description_chars: 1800
 service_page_noise_reject_score: 6
+
+
+# -------------------------------------------------------------------
+# V5 CandidateJobs pipeline
+# -------------------------------------------------------------------
+candidate_jobs_tab: CandidateJobs
+rejected_jobs_tab: RejectedJobs
+candidate_roles_per_run: 8
+candidate_cities_per_run: 5
+candidate_max_queries_per_run: 40
+candidate_max_candidates_per_run: 100
+candidate_max_rejected_per_run: 120
+candidate_request_delay_seconds: 0.6
+
+# V5 keeps LinkedIn/job boards as signals only.
+# They are never written as final apply_url in Sheet1.
+candidate_use_linkedin_signals: true
+candidate_use_job_board_signals: true
