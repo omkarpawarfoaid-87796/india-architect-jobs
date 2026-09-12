@@ -1,5 +1,5 @@
 """
-V4.4.5 Fresh Job Discovery
+V4.4.6 Fresh Job Discovery
 
 Purpose:
 - Find newly surfaced architecture / built-environment job signals every few hours.
@@ -42,7 +42,7 @@ def is_linkedin_url(url):
 
 def is_company_listed_linkedin_signal(signal):
     """
-    V4.4.5: LinkedIn can be used only as a public search-result signal when
+    V4.4.6: LinkedIn can be used only as a public search-result signal when
     the search result itself exposes the employer/company name. We never fetch
     LinkedIn and never output LinkedIn as apply_url.
     """
@@ -60,6 +60,13 @@ def signal_origin_label(signal):
 
 
 def blocked_signal_domain(url):
+    url_l = core.clean_text(url).lower()
+    if "homelane.com" in url_l and any(bit in url_l for bit in (
+        "/interior-designers", "/interior-designers-in", "/modular-kitchen", "/wardrobe", "/home-interior"
+    )):
+        return True
+    if "careers.smartrecruiters.com/aecom2/anz" in url_l or "anz---early-careers" in url_l:
+        return True
     """
     Compatibility-safe blocked-domain check.
 
@@ -291,7 +298,7 @@ def result_to_signal(result, cfg):
 
     signal_url = core.canonical_url(result.get("url") or "")
 
-    # V4.4.5: LinkedIn is allowed only when the public search-result metadata
+    # V4.4.6: LinkedIn is allowed only when the public search-result metadata
     # gives a company/employer. Otherwise we cannot safely resolve it to the
     # official employer page.
     if is_linkedin_url(signal_url) and not company:
@@ -334,7 +341,7 @@ def official_resolution_queries(signal):
 
 def fresh_signal_source_reject_reason(url, title="", snippet="", page_text=""):
     """
-    V4.4.5 gate: fresh discovery must focus on hiring pages, not content pages.
+    V4.4.6 gate: fresh discovery must focus on hiring pages, not content pages.
     """
     url = core.canonical_url(url or "")
     if not url:
@@ -391,7 +398,7 @@ def fresh_signal_source_reject_reason(url, title="", snippet="", page_text=""):
 
 def source_from_direct_job_page(result, signal, cfg):
     """
-    V4.4.5 volume improvement: if a public official result is itself a valid
+    V4.4.6 volume improvement: if a public official result is itself a valid
     job page, add that exact page as a source. This lets new jobs enter Sheet1
     without waiting for a separate careers-page resolver.
     """
@@ -742,6 +749,7 @@ def self_test():
         "Book Free Design Session Modular Kitchen Cost 45-day delivery 10-year warranty",
     )
 
+    assert blocked_signal_domain("https://www.homelane.com/interior-designers/ahmedabad")
     print("FRESH JOB DISCOVERY SELF TEST PASSED")
 
 

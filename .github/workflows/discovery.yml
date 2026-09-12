@@ -1,4 +1,4 @@
-name: Daily Architect Source Discovery V4.4.5
+name: Daily Architect Source Discovery V4.4.6
 
 on:
   workflow_dispatch:
@@ -6,13 +6,13 @@ on:
     - cron: "35 20 * * *"
 
 concurrency:
-  group: architect-source-discovery-v445
+  group: architect-source-discovery-v446
   cancel-in-progress: false
 
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     steps:
       - name: Checkout

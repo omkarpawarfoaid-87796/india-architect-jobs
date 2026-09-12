@@ -1,4 +1,4 @@
-name: Fresh Architect Job Discovery V4.4.5
+name: Fresh Architect Job Discovery V4.4.6
 
 on:
   workflow_dispatch:
@@ -6,13 +6,13 @@ on:
     - cron: "42 */3 * * *"
 
 concurrency:
-  group: fresh-architect-job-discovery-v445
+  group: fresh-architect-job-discovery-v446
   cancel-in-progress: false
 
 jobs:
   fresh-jobs:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 35
 
     steps:
       - name: Checkout

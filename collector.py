@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 IST = ZoneInfo("Asia/Kolkata")
 USER_AGENT = (
-    "ArchitectJobsCollector/4.4.5 "
+    "ArchitectJobsCollector/4.4.6 "
     "(public-job-indexer; respects public access controls; no authentication bypass)"
 )
 
@@ -409,7 +409,7 @@ def fetch(url, cfg, method="GET"):
         r = requests.request(
             method,
             url,
-            timeout=cfg.get("request_timeout_seconds", 15),
+            timeout=int(cfg.get("request_timeout_seconds", 8)),
             headers={
                 "User-Agent": USER_AGENT,
                 "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
@@ -1315,7 +1315,7 @@ def _title_has_real_role(title):
 
 def real_vacancy_reject_reason(job, cfg=None):
     """
-    V4.4.4 quality lock.
+    V4.4.6 quality lock.
 
     Reject service/location landing pages and generic region/career collection
     pages before they can become website jobs. This specifically prevents rows
@@ -1363,7 +1363,7 @@ def real_vacancy_reject_reason(job, cfg=None):
 
 def meta_record_vacancy_reject_reason(record, cfg=None):
     """
-    V4.4.5 hard cleanup for old rows already stored in _CollectorMeta.
+    V4.4.6 hard cleanup for old rows already stored in _CollectorMeta.
 
     Earlier versions may have written service/location pages (for example
     HomeLane city pages) or ATS region bucket pages (for example AECOM
@@ -1396,7 +1396,7 @@ def meta_record_vacancy_reject_reason(record, cfg=None):
 
     reason = real_vacancy_reject_reason(job, cfg or {})
     if reason:
-        return f"V4.4.5 hard cleanup: {reason}"
+        return f"V4.4.6 hard cleanup: {reason}"
 
     company = clean_text(job["company"]).lower()
     title = clean_text(job["title"]).lower()
@@ -1408,21 +1408,21 @@ def meta_record_vacancy_reject_reason(record, cfg=None):
         or any(bit in url for bit in SERVICE_PAGE_URL_BITS)
         or _service_noise_score(desc) >= 5
     ):
-        return "V4.4.5 hard cleanup: HomeLane city/service landing page, not a vacancy"
+        return "V4.4.6 hard cleanup: HomeLane city/service landing page, not a vacancy"
 
     if "aecom" in company and re.search(
         r"\b(?:australia|new zealand|anz|americas|middle east|early careers|graduate careers)\b",
         f"{title} {url}",
         re.I,
     ):
-        return "V4.4.5 hard cleanup: AECOM region/program bucket page, not an India job posting"
+        return "V4.4.6 hard cleanup: AECOM region/program bucket page, not an India job posting"
 
     return ""
 
 
 def source_page_hard_reject_reason(url, title="", page_text="", cfg=None):
     """
-    V4.4.5 source-level cleanup.
+    V4.4.6 source-level cleanup.
 
     Reject sources that are actually service/location pages before they keep
     recreating fake jobs on every hourly run.
@@ -1445,15 +1445,23 @@ def source_page_hard_reject_reason(url, title="", page_text="", cfg=None):
             "ats region/program",
         )
     ):
-        return f"V4.4.5 source cleanup: {reason}"
+        return f"V4.4.6 source cleanup: {reason}"
 
     low_url = canonical_url(url or "").lower()
+    # V4.4.6: block known non-job/service landing URLs before fetching/parsing huge pages.
+    if "homelane.com" in low_url and any(bit in low_url for bit in (
+        "/interior-designers", "/interior-designers-in",
+        "/modular-kitchen", "/wardrobe", "/home-interior",
+    )):
+        return "V4.4.6 source cleanup: HomeLane service/location page, not a hiring source"
+    if "careers.smartrecruiters.com/aecom2/anz" in low_url or "anz---early-careers" in low_url:
+        return "V4.4.6 source cleanup: AECOM ANZ early-careers bucket, not an India job source"
     low_text = clean_text(page_text or "").lower()
     low_title = clean_text(title or "").lower()
     if any(bit in low_url for bit in SERVICE_PAGE_URL_BITS) and _service_noise_score(low_text) >= 3:
-        return "V4.4.5 source cleanup: service/location marketing page, not a hiring source"
+        return "V4.4.6 source cleanup: service/location marketing page, not a hiring source"
     if re.search(r"\b(?:australia|new zealand|anz|graduate careers|early careers)\b", f"{low_title} {low_url}"):
-        return "V4.4.5 source cleanup: ATS region/program bucket, not an India job source"
+        return "V4.4.6 source cleanup: ATS region/program bucket, not an India job source"
     return ""
 
 
@@ -1465,7 +1473,7 @@ def normalize_job(job, cfg):
 
     job["description"] = clean_text(job.get("description"))
 
-    # V4.4.4: reject marketing/service/location pages and generic ATS buckets
+    # V4.4.6: reject marketing/service/location pages and generic ATS buckets
     # before keyword/location checks. This keeps Sheet1 website-ready.
     reject_reason = real_vacancy_reject_reason(job, cfg)
     if reject_reason:
@@ -2371,7 +2379,7 @@ def scan_generic_ats_source(start_url, cfg):
     for url, hint in links:
         parsed, _ = parse_page_for_jobs(url, cfg, title_hint=hint)
         jobs.extend(parsed)
-        time.sleep(cfg.get("request_delay_seconds", 0.15))
+        time.sleep(float(cfg.get("request_delay_seconds", 0.05)))
 
     return jobs, {
         "source": start_url,
@@ -2428,6 +2436,17 @@ def scan_ats_source(start_url, cfg):
 
 
 def scan_career_source(start_url, cfg):
+    # V4.4.6: fast URL-only source rejection prevents huge service pages from stalling hourly runs.
+    fast_reject = source_page_hard_reject_reason(start_url, "", "", cfg)
+    if fast_reject:
+        return [], {
+            "source": start_url,
+            "ok": False,
+            "reason": fast_reject,
+            "hard_reject_source": True,
+            "qualified_jobs": 0,
+        }
+
     # V4.4: known public ATS boards use provider-specific/public parsing.
     if ats_provider_from_url(start_url):
         return scan_ats_source(start_url, cfg)
@@ -2473,10 +2492,14 @@ def scan_career_source(start_url, cfg):
         if len(combined) >= cfg.get("max_job_links_per_source", 30):
             break
 
+    max_pages = int(cfg.get("max_pages_per_source", 8))
+    if max_pages > 0:
+        combined = combined[:max_pages]
+
     for url, hint in combined:
         jobs, _ = parse_page_for_jobs(url, cfg, title_hint=hint)
         source_jobs.extend(jobs)
-        time.sleep(cfg.get("request_delay_seconds", 0.15))
+        time.sleep(float(cfg.get("request_delay_seconds", 0.05)))
 
     ats_links = detect_ats_links(r.url, r.text, cfg)
 
@@ -2661,19 +2684,24 @@ def scan_all_sources(cfg):
     for board in cfg.get("greenhouse_boards", []):
         jobs.extend(fetch_greenhouse(board, cfg))
 
-    sources = cfg.get("career_pages", [])
-    workers = max(1, min(int(cfg.get("source_workers", 6)), 12))
+    sources = list(cfg.get("career_pages", []))
+    max_sources = int(cfg.get("max_sources_per_run", 30))
+    if max_sources > 0:
+        sources = sources[:max_sources]
+
+    workers = max(1, min(int(cfg.get("source_workers", 4)), 8))
+    per_future_timeout = int(cfg.get("source_future_timeout_seconds", 45))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(scan_career_source, source, cfg): source for source in sources}
         for fut in as_completed(futures):
             source = futures[fut]
             try:
-                source_jobs, report = fut.result()
+                source_jobs, report = fut.result(timeout=per_future_timeout)
                 jobs.extend(source_jobs)
                 reports.append(report)
                 print(f"SOURCE {'OK' if report['ok'] else 'FAIL'} | {source} | jobs={report.get('qualified_jobs', 0)}")
             except Exception as e:
-                reports.append({"source": source, "ok": False, "reason": str(e)})
+                reports.append({"source": source, "ok": False, "reason": f"V4.4.6 skipped source safely: {e}"})
                 print(f"SOURCE ERROR | {source} | {e}")
     return dedupe(jobs), reports
 
@@ -3248,6 +3276,9 @@ def website_record_from_meta(record, cfg):
     raw_description = clean_text(
         record.get("Full Description") or record.get("Short Description") or ""
     )
+    max_desc = int(cfg.get("max_description_chars", 1800))
+    if max_desc > 0 and len(raw_description) > max_desc:
+        raw_description = raw_description[:max_desc].rsplit(" ", 1)[0] + "..."
     description = clean_export_description(
         raw_description,
         title=title,
@@ -3370,7 +3401,7 @@ def sync_website_export_sheet(service, spreadsheet_id, meta_tab, export_tab, cfg
                 continue
             if (rec.get("Application Status") or "").strip().lower() != "open":
                 continue
-            # V4.4.5: never export old fake rows even before their meta row is
+            # V4.4.6: never export old fake rows even before their meta row is
             # closed by revalidation. Sheet1 must remain website-ready.
             if meta_record_vacancy_reject_reason(rec, cfg):
                 continue
@@ -3513,6 +3544,29 @@ def revalidate_existing_record(record, cfg):
 
 
 
+
+def close_hard_fake_meta_rows(existing_entries, headers, queue_update):
+    """V4.4.6: close old fake rows without doing slow live revalidation."""
+    changed = 0
+    for row_num, old_row, rec in existing_entries:
+        if (rec.get("Status") or "").lower() != "active":
+            continue
+        reason = meta_record_vacancy_reject_reason(rec, None)
+        if not reason:
+            continue
+        patch = {
+            "Verified At": now_iso(),
+            "Application Status": "Closed",
+            "Status": "Closed",
+            "Closed Reason": reason,
+        }
+        queue_update(row_num, record_to_row(headers, patch, old_row))
+        changed += 1
+    if changed:
+        print(f"V4.4.6 HARD CLEANUP | closed old fake meta rows: {changed}")
+    return changed
+
+
 def write_sheet(jobs, cfg):
     sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
     if not sheet_id:
@@ -3565,6 +3619,9 @@ def write_sheet(jobs, cfg):
             "values": [values],
         }
 
+    # V4.4.6: close obvious fake legacy rows before slow network revalidation.
+    closed_count += close_hard_fake_meta_rows(existing_entries, headers, queue_update)
+
     # Upsert current V2.3 jobs. Match old V2/V2.1 rows by natural vacancy key
     # when their legacy fingerprint was URL-based.
     for job in jobs:
@@ -3606,7 +3663,7 @@ def write_sheet(jobs, cfg):
     # Revalidate remaining active rows that were not rediscovered. This will
     # close legacy rows such as a 2023 vacancy whose deadline was previously missed.
     if cfg.get("revalidate_existing_jobs", True):
-        limit = int(cfg.get("revalidate_limit_per_run", 250))
+        limit = int(cfg.get("revalidate_limit_per_run", 20))
         checked = 0
         for row_num, old_row, rec in existing_entries:
             if checked >= limit:
@@ -3900,7 +3957,7 @@ def update_sources_from_reports(reports, cfg):
             rec["jobs_found"] = "0"
             rec["consecutive_failures"] = "0"
             rec["status"] = "Rejected"
-            rec["quality_reason"] = clean_text(report.get("reason") or "V4.4.5 hard rejected source")
+            rec["quality_reason"] = clean_text(report.get("reason") or "V4.4.6 hard rejected source")
         else:
             try:
                 failures = int(float(rec.get("consecutive_failures") or 0)) + 1
@@ -4290,7 +4347,15 @@ def self_test():
     }
     assert not real_vacancy_reject_reason(real_job, cfg)
 
-    print("SELF TEST PASSED: V4.4.5 validation, hard cleanup, blank external_id, real-vacancy lock, LinkedIn signal-only resolution and 500px logo rules are working.")
+
+    # V4.4.6 timeout-safety self-test
+    assert source_page_hard_reject_reason(
+        "https://www.homelane.com/interior-designers/ahmedabad", "", "", cfg
+    )
+    assert source_page_hard_reject_reason(
+        "https://careers.smartrecruiters.com/AECOM2/anz---early-careers---opportunities", "", "", cfg
+    )
+    print("SELF TEST PASSED: V4.4.6 validation, timeout-safe cleanup, fake-row removal and 500px logo rules are working.")
 
 
 def main():
@@ -4321,7 +4386,7 @@ def main():
             print(f"SOURCES WARNING | could not update source health | {e}")
 
     print("=" * 80)
-    print(f"V4.4.5 cutoff date: {minimum_date(cfg).isoformat()}")
+    print(f"V4.4.6 cutoff date: {minimum_date(cfg).isoformat()}")
     print(f"Sources attempted: {len(reports)}")
     print(f"Qualified OPEN Indian architecture jobs this run: {len(jobs)}")
     print("=" * 80)

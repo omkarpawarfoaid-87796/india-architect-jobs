@@ -35,7 +35,7 @@ DISCOVERY_BLOCKED_DOMAINS = {
     "architizer.com",
     "dezeen.com",
     "designboom.com",
-    # V4.4.5 article / institute / education / content pages that create false fresh signals.
+    # V4.4.6 article / institute / education / content pages that create false fresh signals.
     "nrd.adsttc.com",
     "adsttc.com",
     "aia.org",
@@ -230,7 +230,7 @@ def load_config():
 
 
 def fetch(url, cfg):
-    # V4.4.5 hotfix: fetch must not reference search-result variables.
+    # V4.4.6 hotfix: fetch must not reference search-result variables.
     if not url:
         return None
     if hard_block_reason(url) or core.is_blocked_domain(url, cfg):
@@ -242,7 +242,7 @@ def fetch(url, cfg):
             timeout=int(cfg.get("request_timeout_seconds", 15)),
             headers={
                 "User-Agent": (
-                    "ArchitectJobsDiscovery/4.4.5.2 "
+                    "ArchitectJobsDiscovery/4.4.6.2 "
                     "(public-source discovery; no authentication bypass)"
                 ),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -329,6 +329,13 @@ def search_web(query, cfg):
 
 
 def hard_block_reason(url):
+    url_l = core.clean_text(url).lower()
+    if "homelane.com" in url_l and any(bit in url_l for bit in (
+        "/interior-designers", "/interior-designers-in", "/modular-kitchen", "/wardrobe", "/home-interior"
+    )):
+        return "HomeLane service/location page, not a job source"
+    if "careers.smartrecruiters.com/aecom2/anz" in url_l or "anz---early-careers" in url_l:
+        return "AECOM ANZ early-careers bucket, not an India job source"
     d = host(url)
     if not d:
         return "Missing domain"
@@ -517,7 +524,7 @@ def homepage_identity_context(url, cfg):
 
 def careerish_url(url):
     """
-    V4.4.5: stricter than older versions.
+    V4.4.6: stricter than older versions.
 
     Accept real hiring paths such as /careers, /career, /jobs, /join-us,
     /work-with-us, /openings. Do not treat content paths such as
@@ -911,7 +918,7 @@ def audit_existing_discovered_sources(service, sheet_id, tab, cfg):
         if source_type not in ("Discovered Website", "Fresh Job Signal", "Fresh Direct Job Page"):
             continue
 
-        # V4.4.5: remove previously accepted service/direct fake sources.
+        # V4.4.6: remove previously accepted service/direct fake sources.
         source_reason = core.source_page_hard_reject_reason(
             url,
             clean(rec.get("company_name") or ""),
@@ -1100,6 +1107,7 @@ def self_test():
     assert careerish_url("https://examplearchitects.in/careers")
     assert careerish_url("https://examplearchitects.in/jobs/senior-architect")
 
+    assert hard_block_reason("https://www.homelane.com/interior-designers/ahmedabad")
     print("DISCOVERY SELF TEST PASSED")
 
 
