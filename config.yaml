@@ -1,4 +1,4 @@
-# Architect Jobs Collector V6.1 — Single Sheet Quantity Mode
+# Architect Jobs Collector V6.2 — Single Sheet Clean Quantity Mode
 # India-only architecture/design jobs.
 # Freshness rule requested by user:
 # - Never accept a dated job posted before 2026-09-01.
@@ -419,6 +419,22 @@ platform_blocked_domains:
   - shine.com
   - timesjobs.com
 
+  - dictionary.cambridge.org
+  - dictionary.com
+  - merriam-webster.com
+  - britannica.com
+  - wikipedia.org
+  - architecturaldigest.com
+  - autodesk.com
+  - bimobject.com
+  - bim.com
+  - trimble.com
+  - bigrentz.com
+  - bimcollab.com
+  - engineeringcivil.org
+  - archilabs.ai
+  - revitgods.com
+
 ats_search_queries_per_source: 6
 ats_search_results_per_source: 8
 ats_search_patterns:
@@ -521,7 +537,7 @@ v6_search_queries:
 
 
 # -------------------------------------------------------------------
-# V6.1 Quantity Mode
+# V6.2 Clean Quantity Mode
 # -------------------------------------------------------------------
 # This is the fix for low quantity. V6 official-only output stays clean but low.
 # V6.1 still writes only Sheet1, but it can publish real public job-detail URLs
@@ -533,6 +549,7 @@ v6_quantity_max_queries_per_run: 90
 v6_results_per_query: 10
 
 v6_quantity_search_queries:
+  # Strict job detail pages only. This avoids dictionary, article, BIM guide, Wikipedia, product pages.
   - 'site:naukri.com/job-listings "Junior Architect" "Mumbai"'
   - 'site:naukri.com/job-listings "Architect" "Mumbai"'
   - 'site:naukri.com/job-listings "Senior Architect" "Mumbai"'
@@ -542,17 +559,21 @@ v6_quantity_search_queries:
   - 'site:naukri.com/job-listings "Architectural Draftsman" "Mumbai"'
   - 'site:naukri.com/job-listings "Junior Architect" "Delhi"'
   - 'site:naukri.com/job-listings "Architect" "Delhi"'
+  - 'site:naukri.com/job-listings "Senior Architect" "Delhi"'
   - 'site:naukri.com/job-listings "Interior Designer" "Delhi"'
   - 'site:naukri.com/job-listings "BIM" "Delhi"'
   - 'site:naukri.com/job-listings "Junior Architect" "Bengaluru"'
   - 'site:naukri.com/job-listings "Architect" "Bengaluru"'
+  - 'site:naukri.com/job-listings "Senior Architect" "Bengaluru"'
   - 'site:naukri.com/job-listings "Interior Designer" "Bengaluru"'
   - 'site:naukri.com/job-listings "BIM" "Bengaluru"'
   - 'site:naukri.com/job-listings "Junior Architect" "Hyderabad"'
   - 'site:naukri.com/job-listings "Architect" "Hyderabad"'
+  - 'site:naukri.com/job-listings "Senior Architect" "Hyderabad"'
   - 'site:naukri.com/job-listings "Interior Designer" "Hyderabad"'
   - 'site:naukri.com/job-listings "BIM" "Hyderabad"'
   - 'site:naukri.com/job-listings "Architect" "Pune"'
+  - 'site:naukri.com/job-listings "Senior Architect" "Pune"'
   - 'site:naukri.com/job-listings "Interior Designer" "Pune"'
   - 'site:naukri.com/job-listings "Architect" "Chennai"'
   - 'site:naukri.com/job-listings "Interior Designer" "Chennai"'
@@ -566,21 +587,12 @@ v6_quantity_search_queries:
   - 'site:in.indeed.com/viewjob "3D Visualizer" "India"'
   - 'site:foundit.in/job "Junior Architect" "India"'
   - 'site:foundit.in/job "Architect" "India"'
+  - 'site:foundit.in/job "Senior Architect" "India"'
   - 'site:foundit.in/job "Interior Designer" "India"'
   - 'site:foundit.in/job "BIM" "India"'
-  - 'site:shine.com/jobs "Architect" "India"'
-  - 'site:shine.com/jobs "Interior Designer" "India"'
+  - 'site:shine.com/jobs "Architect" "India" "apply"'
+  - 'site:shine.com/jobs "Interior Designer" "India" "apply"'
   - 'site:timesjobs.com/candidate/JobDetailView.html "Architect" "India"'
   - 'site:timesjobs.com/candidate/JobDetailView.html "Interior Designer" "India"'
   - 'site:glassdoor.co.in/job-listing "Architect" "India"'
   - 'site:glassdoor.co.in/job-listing "Interior Designer" "India"'
-  - '"Junior Architect" "apply now" "Mumbai" "India"'
-  - '"Senior Architect" "apply now" "Mumbai" "India"'
-  - '"Interior Designer" "apply now" "Mumbai" "India"'
-  - '"BIM Coordinator" "apply now" "India"'
-  - '"Revit Architect" "apply now" "India"'
-  - '"Architectural Designer" "apply now" "India"'
-  - '"3D Visualizer" "apply now" "India"'
-  - '"Architectural Draftsman" "apply now" "India"'
-  - '"Site Architect" "apply now" "India"'
-  - '"Project Architect" "apply now" "India"'

@@ -1,43 +1,22 @@
-# Architect Job Collector V6.1 — Single Sheet Quantity Mode
+# Architect Job Collector V6.2 — Clean Quantity Mode
 
-This version fixes the low-quantity issue from V6.
+Single Google Sheet output only: `Sheet1`.
 
-## Output
+V6.2 fixes the V6.1 quantity issue where dictionary/article/BIM/product/reference pages were incorrectly added as jobs.
 
-Only one Google Sheet tab is used for website output:
+## Rules
 
-- `Sheet1`
+- Use only `Sheet1` for the website.
+- Do not create CandidateJobs, RejectedJobs, Sources, AutomationOutput, or _CollectorMeta.
+- Delete old extra tabs after a successful run.
+- LinkedIn is never a final apply URL.
+- Public job board URLs are allowed only when they are specific job detail URLs.
+- Public web URLs are allowed only when they are career/job/opening URLs with clear vacancy evidence.
+- Reference/content/product pages are rejected.
 
-Old pipeline tabs are deleted automatically after a successful run:
+## Main command
 
-- `_CollectorMeta`
-- `Sources`
-- `CandidateJobs`
-- `AutomationOutput`
-- `RejectedJobs`
-
-## What changed from V6
-
-V6 was too strict. It used LinkedIn/job boards as signals but published only jobs resolved to official employer pages. That kept the output clean but low.
-
-V6.1 keeps one-sheet output, but adds Quantity Mode:
-
-- Company career pages are still scanned.
-- Public web searches are used.
-- LinkedIn stays signal-only and is never published as final `apply_url`.
-- Public job-board detail pages are allowed as final `apply_url` when they look like a specific real job detail page.
-- Search/list/category/service/content pages are rejected.
-
-## Website rule
-
-The website developer should use only `Sheet1`.
-
-`external_id` stays blank because the website developer generates IDs.
-
-## Workflow
-
-Run only:
-
-`Single Sheet Job Finder V6.1 Quantity`
-
-Expected runtime: 5–25 minutes depending on search results.
+```bash
+python single_sheet_jobs.py --self-test
+python single_sheet_jobs.py
+```

@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 
 import collector as core
 
-VERSION = "V6.1-QUANTITY"
+VERSION = "V6.2-CLEAN-QUANTITY"
 ONE_SHEET_TAB = "Sheet1"
 
 # Final website schema. Do not add or remove columns without developer approval.
@@ -65,6 +65,18 @@ CONTENT_OR_DIRECTORY_DOMAINS = {
     "designboom.com", "www.designboom.com",
     "architizer.com", "www.architizer.com",
     "web.archive.org", "archive.org",
+    # V6.2: block educational/content/product/reference pages that V6.1 wrongly accepted.
+    "dictionary.cambridge.org", "www.dictionary.com", "dictionary.com", "merriam-webster.com", "www.merriam-webster.com",
+    "britannica.com", "www.britannica.com",
+    "wikipedia.org", "en.wikipedia.org", "en.m.wikipedia.org", "m.wikipedia.org",
+    "architecturaldigest.com", "www.architecturaldigest.com",
+    "autodesk.com", "www.autodesk.com", "boards.autodesk.com", "dotcom-publish-iac-default.efddotcom-stg.autodesk.com",
+    "bigrentz.com", "www.bigrentz.com", "bimobject.com", "www.bimobject.com",
+    "bim.com", "www.bim.com", "trimble.com", "www.trimble.com",
+    "bimcollab.com", "www.bimcollab.com", "engineeringcivil.org", "www.engineeringcivil.org",
+    "archilabs.ai", "www.archilabs.ai", "revitgods.com", "www.revitgods.com",
+    "loharchitects.com", "www.loharchitects.com", "spfa.com", "www.spfa.com",
+    "architecturaldesigns.com", "www.architecturaldesigns.com",
 }
 
 FINAL_BLOCKED_DOMAINS = LINKEDIN_DOMAINS | CONTENT_OR_DIRECTORY_DOMAINS
@@ -101,6 +113,53 @@ SERVICE_TEXT_MARKERS = (
     "home interior cost", "modular kitchen cost", "book free design session",
     "experience centre", "visit our experience centre", "own a homelane franchise",
 )
+
+
+VACANCY_TERMS = (
+    "apply now", "apply for this job", "apply for this role", "send your resume",
+    "send resume", "send your cv", "send cv", "current opening", "current openings",
+    "open position", "open positions", "job opening", "job openings", "vacancy",
+    "vacancies", "we are hiring", "we're hiring", "hiring", "join our team",
+    "careers@", "jobs@", "hr@", "requirements", "responsibilities", "experience",
+    "years experience", "yrs experience", "qualification", "job description",
+)
+
+CONTENT_TITLE_MARKERS = (
+    "definition", "meaning", "what is", "what are", "explained", "guide to",
+    "homepage", "news", "designs and projects", "download", "objects", "free trial",
+    "learn", "article", "blog", "magazine", "dictionary", "wikipedia",
+)
+
+
+def looks_like_reference_or_content_page(title='', description='', url=''):
+    title_l = clean(title).lower()
+    desc_l = clean(description).lower()
+    url_l = clean(url).lower()
+    if domain_matches(url, CONTENT_OR_DIRECTORY_DOMAINS):
+        return True
+    if title_l in {"architecture", "architect", "architectural", "autodesk revit", "3d modeling", "building information modeling", "bim objects"}:
+        return True
+    if any(m in title_l for m in CONTENT_TITLE_MARKERS):
+        # Real vacancies rarely have these as the title. This catches dictionary/article/product pages.
+        if not any(v in title_l for v in ("hiring", "job", "opening", "vacancy", "career")):
+            return True
+    if any(x in url_l for x in ("/wiki/", "/dictionary/", "/blog/", "/articles/", "/article/", "/topic/", "/solutions/", "/products/", "/free-trial", "/overview")):
+        if not any(x in url_l for x in ("career", "careers", "jobs", "job-listings", "viewjob")):
+            return True
+    if any(x in desc_l for x in ("definition:", "learn more", "what is", "a practical guide", "explained")) and not any(v in desc_l for v in ("apply", "hiring", "send resume", "send your cv", "job description")):
+        return True
+    return False
+
+
+def has_vacancy_evidence(title='', description='', url='', query=''):
+    text = f"{clean(title)} {clean(description)} {clean(url)} {clean(query)}".lower()
+    # For job-board detail URLs the URL pattern itself is strong evidence, but still require role relevance elsewhere.
+    if is_public_job_board_url(url) and is_specific_job_board_job_url(url):
+        return True
+    score = sum(1 for t in VACANCY_TERMS if t in text)
+    if "career" in (url or '').lower() or "jobs" in (url or '').lower() or "openings" in (url or '').lower():
+        score += 1
+    return score >= 2
 
 
 def clean(value):
@@ -171,6 +230,9 @@ def hard_reject_reason(title="", description="", url="", employer=""):
     desc_l = clean(description).lower()
     url_l = clean(url).lower()
     employer_l = clean(employer).lower()
+
+    if looks_like_reference_or_content_page(title, description, url):
+        return "Reference/content/product page, not a job vacancy"
 
     if any(title_l.startswith(prefix) for prefix in SERVICE_PAGE_PREFIXES):
         return "Service/location landing page, not a job vacancy"
@@ -282,6 +344,10 @@ def website_record_valid(record, cfg):
         return False, reason
     if not role_relevant(title, description):
         return False, "Role not relevant"
+    # V6.2: quantity mode must still look like a real vacancy, not only contain architecture words.
+    # Keep email/official career-page rows that clearly list responsibilities/experience/qualification.
+    if not has_vacancy_evidence(title, description, url, ""):
+        return False, "No clear hiring/apply/vacancy evidence"
     location_text = " ".join([
         clean(record.get("address")), clean(record.get("location")), description, employer
     ])
@@ -570,8 +636,16 @@ def quantity_signal_to_record(hit, cfg):
     query = clean(hit.get("query"))
     if not url or is_linkedin_url(url):
         return None, "LinkedIn URL blocked"
+    if looks_like_reference_or_content_page(title, snippet, url):
+        return None, "Reference/content/product page, not a job vacancy"
     if is_public_job_board_url(url) and not is_specific_job_board_job_url(url):
         return None, "Not a specific job-board detail URL"
+    if not is_public_job_board_url(url):
+        # Public web results are allowed only when they are career/job/opening URLs with vacancy evidence.
+        if not career_like_url(url):
+            return None, "Public web result is not a career/job URL"
+        if not has_vacancy_evidence(title, snippet, url, query):
+            return None, "No clear hiring/apply/vacancy evidence"
     if is_generic_job_search_page(title, url, snippet):
         return None, "Generic job search page"
     job_title, employer = parse_signal_job_title_company(title, snippet, url)
@@ -589,7 +663,7 @@ def quantity_signal_to_record(hit, cfg):
     address = f"{city}, India" if city != "India" else "India"
     if is_blocked_final_url(url, cfg):
         return None, "Final URL blocked"
-    desc = snippet or f"{job_title} opening at {employer}. Public job source detected by V6.1 Quantity Mode."
+    desc = snippet or f"{job_title} opening at {employer}. Public job source detected by V6.2 Clean Quantity Mode."
     exp = extract_experience(f"{title} {snippet}")
     tag_terms = []
     for term in cfg.get("skill_terms", []):
@@ -638,10 +712,10 @@ def collect_quantity_records(cfg):
     max_queries = int(cfg.get("v6_quantity_max_queries_per_run", 80))
     target = int(cfg.get("v6_quantity_target_records_per_run", 75))
     print("=" * 80)
-    print(f"V6.1 QUANTITY MODE | queries={min(len(queries), max_queries)} target={target}")
+    print(f"V6.2 CLEAN QUANTITY MODE | queries={min(len(queries), max_queries)} target={target}")
     print("=" * 80)
     for query in queries[:max_queries]:
-        print(f"V6.1 JOB SEARCH | {query}")
+        print(f"V6.2 JOB SEARCH | {query}")
         for hit in bing_rss(query, cfg):
             u = norm_url(hit.get("url"))
             if not u or u in seen_urls:
@@ -650,9 +724,9 @@ def collect_quantity_records(cfg):
             rec, reason = quantity_signal_to_record(hit, cfg)
             if rec:
                 records.append(rec)
-                print(f"V6.1 ACCEPT SIGNAL JOB | {rec.get('employer_name')} | {rec.get('title')} | {u}")
+                print(f"V6.2 ACCEPT SIGNAL JOB | {rec.get('employer_name')} | {rec.get('title')} | {u}")
             else:
-                print(f"V6.1 REJECT SIGNAL | {hit.get('title')} | {reason}")
+                print(f"V6.2 REJECT SIGNAL | {hit.get('title')} | {reason}")
             if len(records) >= target:
                 return records
         time.sleep(float(cfg.get("v6_search_delay_seconds", 0.25)))
@@ -755,7 +829,7 @@ def build_single_sheet_records(existing_records, jobs, cfg, extra_records=None):
         valid, reason = website_record_valid(web, cfg)
         if not valid:
             rejected_count += 1
-            print(f"V6.1 REJECT EXTRA | {web.get('employer_name')} | {web.get('title')} | {reason}")
+            print(f"V6.2 REJECT EXTRA | {web.get('employer_name')} | {web.get('title')} | {reason}")
             continue
         key = web_key(web)
         if key not in by_key:
@@ -793,7 +867,7 @@ def run(dry_run=False):
 
     quantity_records = collect_quantity_records(cfg)
     print("=" * 80)
-    print(f"V6.1 quantity-mode public-source records before Sheet1 merge: {len(quantity_records)}")
+    print(f"V6.2 clean quantity-mode public-source records before Sheet1 merge: {len(quantity_records)}")
     print("=" * 80)
 
     if dry_run:
@@ -819,7 +893,7 @@ def run(dry_run=False):
     deleted = delete_old_pipeline_tabs(service, sheet_id, cfg)
 
     print("=" * 80)
-    print("V6.1 SINGLE SHEET QUANTITY COMPLETE")
+    print("V6.2 SINGLE SHEET CLEAN QUANTITY COMPLETE")
     print(f"Sheet tab: {tab}")
     print(f"Existing kept: {stats['existing_kept']}")
     print(f"New/updated official accepted jobs: {stats['new_added']}")
@@ -861,6 +935,18 @@ def self_test():
     ok, reason = website_record_valid(linkedin, cfg)
     assert not ok
 
+    content = dict(bad)
+    content.update({
+        "title": "ARCHITECTURAL Definition & Meaning",
+        "description": "ARCHITECTURAL definition: of or relating to architecture. Learn more.",
+        "employer_name": "Dictionary",
+        "apply_url": "https://www.dictionary.com/browse/architectural",
+        "address": "Mumbai, India",
+        "location": "Mumbai|India",
+    })
+    ok, reason = website_record_valid(content, cfg)
+    assert not ok and ("content" in reason.lower() or "reference" in reason.lower()), reason
+
     public_board = dict(linkedin)
     public_board.update({
         "apply_url": "https://www.naukri.com/job-listings-junior-architect-abc-architects-mumbai-1-to-3-years-123",
@@ -896,7 +982,7 @@ def self_test():
     assert rows[0]["external_id"] == ""
     assert stats["rejected_count"] == 1
 
-    print("V6.1 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, LinkedIn blocked, public job-board detail URLs allowed for quantity mode, dedupe and blank external_id are working.")
+    print("V6.2 SELF TEST PASSED: single Sheet1 output, fake-row cleanup, LinkedIn blocked, public job-board detail URLs allowed for quantity mode, dedupe and blank external_id are working.")
 
 
 def main():
