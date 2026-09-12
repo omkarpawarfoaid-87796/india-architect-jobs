@@ -230,19 +230,12 @@ def load_config():
 
 
 def fetch(url, cfg):
+    # V4.4.4 hotfix: fetch must not reference search-result variables.
     if not url:
         return None
     if hard_block_reason(url) or core.is_blocked_domain(url, cfg):
         return None
 
-    # V4.4.4: do not let city/service landing pages become Sources.
-    title = clean(result.get("title") or "")
-    snippet = clean(result.get("snippet") or "")
-    reason = core.real_vacancy_reject_reason(
-        {"title": title, "description": snippet, "source_url": url}, cfg
-    )
-    if reason and any(key in reason.lower() for key in ("service/location", "marketing/service", "region/career")):
-        return None
     try:
         r = requests.get(
             url,
